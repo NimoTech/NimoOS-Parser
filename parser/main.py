@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from parser.routes import embed, health, jobs, models, rescan, stats
+from parser.routes import embed, health, jobs, models, rerank, rescan, stats
 
 log = logging.getLogger("parser.main")
 
@@ -62,6 +62,7 @@ def create_app(*, skip_workers: bool = False) -> FastAPI:
     app.include_router(embed.router)
     app.include_router(health.router)
     app.include_router(jobs.router)
+    app.include_router(rerank.router)
     app.include_router(rescan.router)
     app.include_router(stats.router)
     app.include_router(models.router)
