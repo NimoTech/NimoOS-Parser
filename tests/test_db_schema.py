@@ -32,4 +32,11 @@ def test_init_db_idempotent(tmp_path):
 def test_wiki_cursor_singleton(tmp_path):
     conn = init_db(tmp_path / "p.db")
     rows = conn.execute("SELECT id, since_ms FROM wiki_cursor").fetchall()
-    assert rows == [(1, 0)]
+    assert [tuple(r) for r in rows] == [(1, 0)]
+
+
+def test_row_factory_enables_dict_access(tmp_path):
+    conn = init_db(tmp_path / "p.db")
+    row = conn.execute("SELECT id, since_ms FROM wiki_cursor").fetchone()
+    assert row["id"] == 1
+    assert row["since_ms"] == 0
