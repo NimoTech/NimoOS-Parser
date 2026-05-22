@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from parser.routes import health, jobs, models, rescan, stats
+from parser.routes import embed, health, jobs, models, rescan, stats
 
 log = logging.getLogger("parser.main")
 
@@ -59,6 +59,7 @@ async def _lifespan(app: FastAPI):
 def create_app(*, skip_workers: bool = False) -> FastAPI:
     app = FastAPI(title="NimoOS-Parser", version="0.1.0",
                   lifespan=_lifespan)
+    app.include_router(embed.router)
     app.include_router(health.router)
     app.include_router(jobs.router)
     app.include_router(rescan.router)
