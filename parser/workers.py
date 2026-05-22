@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import sqlite3
 import time
@@ -14,6 +15,7 @@ class WorkerPool:
         self, conn: sqlite3.Connection, *, text_pipeline, concurrency: int = 2,
         lease_s: int = 300, max_attempts: int = 5,
         idle_sleep_s: float = 0.5,
+        wiki_client=None, parser_version: str = "parser/0.1.0",
     ) -> None:
         self.conn = conn
         self.text_pipeline = text_pipeline
@@ -21,6 +23,8 @@ class WorkerPool:
         self.lease_s = lease_s
         self.max_attempts = max_attempts
         self.idle_sleep_s = idle_sleep_s
+        self.wiki_client = wiki_client
+        self.parser_version = parser_version
         self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
 
@@ -55,6 +59,7 @@ class WorkerPool:
                     complete_job, self.conn, job["id"],
                     int(time.time() * 1000),
                 )
+                await self._notify_wiki(job, status="indexed" if job["op"] != "delete" else "deleted")
             except Exception as e:
                 log.exception("worker %s failed job id=%s", worker_id, job["id"])
                 await asyncio.to_thread(
@@ -62,6 +67,38 @@ class WorkerPool:
                     error=str(e), now_ms=int(time.time() * 1000),
                     max_attempts=self.max_attempts,
                 )
+                await self._notify_wiki(job, status="failed", error=str(e))
+
+    async def _notify_wiki(self, job: sqlite3.Row, *,
+                           status: str, error: Optional[str] = None) -> None:
+        if self.wiki_client is None:
+            return
+        modalities = None
+        if status == "indexed":
+            modalities = await asyncio.to_thread(self._fetch_modalities, job)
+        try:
+            await self.wiki_client.report_index_status(
+                path=job["path"], status=status,
+                parser_version=self.parser_version,
+                modalities=modalities, error=error,
+            )
+        except Exception as e:
+            log.warning("wiki report_index_status failed for %s: %s",
+                        job["path"], e)
+
+    def _fetch_modalities(self, job: sqlite3.Row) -> Optional[dict]:
+        row = self.conn.execute(
+            "SELECT fr.modalities_done FROM file_paths fp "
+            "JOIN file_records fr ON fp.file_id = fr.file_id "
+            "WHERE fp.root_id = ? AND fp.path = ?",
+            (job["root_id"], job["path"]),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["modalities_done"])
+        except (ValueError, TypeError):
+            return None
 
     def _process(self, job: sqlite3.Row) -> None:
         op = job["op"]
