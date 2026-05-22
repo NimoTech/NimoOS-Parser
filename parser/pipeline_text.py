@@ -44,7 +44,7 @@ class TextPipeline:
             old_fid, root_lost = outcome.old_root_lost
             remaining = self._collect_root_ids(old_fid)
             self.qstore.set_root_ids_for_file(
-                self.qstore.text_collection, file_id=old_fid, root_ids=remaining,
+                file_id=old_fid, root_ids=remaining,
             )
 
         if outcome.action == ResolveOutcome.APPEND_ROOT_ONLY:
@@ -60,7 +60,7 @@ class TextPipeline:
     def _append_root(self, file_id: str) -> None:
         all_roots = self._collect_root_ids(file_id)
         self.qstore.set_root_ids_for_file(
-            self.qstore.text_collection, file_id=file_id, root_ids=all_roots,
+            file_id=file_id, root_ids=all_roots,
         )
 
     def _collect_root_ids(self, file_id: str) -> list[str]:
@@ -155,5 +155,5 @@ class TextPipeline:
             self.qstore.tombstone_file(file_id=file_id, tombstoned_at=now_ms)
         else:
             self.qstore.set_root_ids_for_file(
-                self.qstore.text_collection, file_id=file_id, root_ids=remaining,
+                file_id=file_id, root_ids=remaining,
             )

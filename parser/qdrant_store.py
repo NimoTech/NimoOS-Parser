@@ -87,17 +87,27 @@ class QdrantStore:
         if batch:
             self.client.upsert(self.visual_collection, points=batch, wait=True)
 
-    def set_root_ids_for_file(self, collection: str, file_id: str,
+    def set_root_ids_for_file(self, file_id: str,
                               root_ids: list[str]) -> None:
-        self.client.set_payload(
-            collection_name=collection,
-            payload={"root_ids": root_ids, "tombstoned_at": None},
-            points=qm.Filter(must=[
-                qm.FieldCondition(key="file_id",
-                                  match=qm.MatchValue(value=file_id)),
-            ]),
-            wait=True,
-        )
+        """Update root_ids + clear tombstone on BOTH text_chunks and
+        visual_chunks for this file_id. Used by REVIVE and partial-root
+        removal flows.
+
+        `tombstone_file` flips both collections to root_ids=[] + tombstoned_at,
+        so the symmetric revive must also touch both — otherwise visual_chunks
+        for image/video/pdf_figure vectors would stay tombstoned even though
+        their content is still reachable through the text collection.
+        """
+        for coll in (self.text_collection, self.visual_collection):
+            self.client.set_payload(
+                collection_name=coll,
+                payload={"root_ids": root_ids, "tombstoned_at": None},
+                points=qm.Filter(must=[
+                    qm.FieldCondition(key="file_id",
+                                      match=qm.MatchValue(value=file_id)),
+                ]),
+                wait=True,
+            )
 
     def tombstone_file(self, file_id: str, tombstoned_at: int) -> None:
         for coll in (self.text_collection, self.visual_collection):

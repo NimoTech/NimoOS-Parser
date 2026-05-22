@@ -24,8 +24,11 @@ class FakeQdrant:
         self.payload_sets = []
     def upsert_text_chunks(self, points):
         self.upserts.extend(points)
-    def set_root_ids_for_file(self, collection, file_id, root_ids):
-        self.payload_sets.append((collection, file_id, root_ids))
+    def set_root_ids_for_file(self, file_id, root_ids):
+        # New API: patches BOTH text + visual collections symmetric to
+        # tombstone_file. Record both updates so tests can verify coverage.
+        self.payload_sets.append(("text_chunks", file_id, root_ids))
+        self.payload_sets.append(("visual_chunks", file_id, root_ids))
     def tombstone_file(self, file_id, tombstoned_at):
         self.payload_sets.append(("tombstone", file_id, tombstoned_at))
     def delete_file(self, file_id):
@@ -89,8 +92,11 @@ def test_pipeline_appends_root_for_known_file(setup):
     pipe.index_file(root_id="root2", path=str(p), now_ms=200)
     # second index call for same content but different root: NO new embed work
     assert len(qstore.upserts) == n_upserts
-    # but a payload_set should have happened on text_chunks
-    assert any(c == "text_chunks" for c, _, _ in qstore.payload_sets)
+    # I3: set_root_ids_for_file must hit BOTH collections (text + visual)
+    # so visual_chunks for this file_id stay reachable from the new root.
+    cols_touched = {c for c, _, _ in qstore.payload_sets if c in (
+        "text_chunks", "visual_chunks")}
+    assert cols_touched == {"text_chunks", "visual_chunks"}
 
 
 def test_pipeline_orphans_old_on_modify(setup):

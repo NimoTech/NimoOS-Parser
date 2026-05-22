@@ -48,20 +48,36 @@ def test_upsert_text_chunk_and_retrieve(store):
     assert pts[0].payload["text"] == "hello world"
 
 
-def test_payload_set_root_ids(store):
-    point_id = str(uuid.uuid4())
+def test_payload_set_root_ids_updates_both_collections(store):
+    text_point = str(uuid.uuid4())
+    visual_point = str(uuid.uuid4())
     store.upsert_text_chunks([{
-        "id": point_id, "dense": [0.0] * 1024,
+        "id": text_point, "dense": [0.0] * 1024,
         "sparse": {"indices": [], "values": []},
         "payload": {"file_id": "abc", "root_ids": ["root1"],
                     "kind": "body", "mime": "text/plain", "chunk_no": 0,
                     "text": "x", "parser_version": "p", "embed_model_version": "e",
                     "indexed_at": 1},
     }])
-    store.set_root_ids_for_file(store.text_collection, file_id="abc",
-                                root_ids=["root1", "root2"])
-    pts = store.client.retrieve(store.text_collection, [point_id], with_payload=True)
-    assert set(pts[0].payload["root_ids"]) == {"root1", "root2"}
+    store.upsert_visual_chunks([{
+        "id": visual_point, "dense": [0.0] * 1152,
+        "payload": {"file_id": "abc", "root_ids": ["root1"],
+                    "kind": "image", "mime": "image/jpeg", "chunk_no": 0,
+                    "parser_version": "p", "embed_model_version": "e",
+                    "indexed_at": 1},
+    }])
+    # Pretend they were tombstoned, then revive:
+    store.tombstone_file(file_id="abc", tombstoned_at=999)
+    store.set_root_ids_for_file(file_id="abc", root_ids=["root1", "root2"])
+    # I3: both collections must reflect the new root_ids AND clear tombstone
+    text_pts = store.client.retrieve(store.text_collection, [text_point],
+                                     with_payload=True)
+    visual_pts = store.client.retrieve(store.visual_collection, [visual_point],
+                                       with_payload=True)
+    assert set(text_pts[0].payload["root_ids"]) == {"root1", "root2"}
+    assert text_pts[0].payload["tombstoned_at"] is None
+    assert set(visual_pts[0].payload["root_ids"]) == {"root1", "root2"}
+    assert visual_pts[0].payload["tombstoned_at"] is None
 
 
 def test_tombstone_and_delete(store):
