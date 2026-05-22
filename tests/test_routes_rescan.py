@@ -17,9 +17,24 @@ def test_rescan_reindex_enqueues_jobs_for_root(client, monkeypatch, tmp_path):
     assert r.status_code == 200
     pending = list_jobs(conn, status="pending", limit=10)
     assert {j["path"] for j in pending} == {"/a.txt", "/b.txt"}
+    # I4: enqueued op must actually be 'reindex' (not silently downgraded
+    # to 'index') so reindex jobs follow the modality-aware reindex path.
+    assert {j["op"] for j in pending} == {"reindex"}
 
 
 def test_rescan_invalid_op(client):
     r = client.post("/v1/parser/rescan",
                      json={"root_id": "root1", "op": "nope"})
     assert r.status_code == 400
+
+
+def test_rescan_verify_returns_501(client, monkeypatch, tmp_path):
+    # I4: verify is a real op name in the spec but the implementation isn't
+    # ready. Refuse explicitly rather than silently downgrading to index.
+    conn = init_db(tmp_path / "p.db")
+    monkeypatch.setattr("parser.routes.rescan.get_conn", lambda: conn)
+    r = client.post("/v1/parser/rescan",
+                     json={"root_id": "root1", "op": "verify"})
+    assert r.status_code == 501
+    # And no jobs were enqueued
+    assert list_jobs(conn, status="pending", limit=10) == []

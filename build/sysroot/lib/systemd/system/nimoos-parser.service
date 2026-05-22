@@ -1,17 +1,25 @@
 [Unit]
 Description=NimoOS Parser
-Documentation=https://github.com/NimoOS/NimoOS-Parser
+Documentation=https://github.com/NimoTech/NimoOS-Parser
 After=qdrant.service nimoos-wiki.service nimoos-message-bus.service
 Wants=qdrant.service
 
 [Service]
 Type=notify
+User=root
+Group=root
+WorkingDirectory=/opt/nimoos-parser
+Environment=PYTHONPATH=/opt/nimoos-parser
 Environment=PARSER_DISCOVERY_FILE=/var/run/nimoos/parser.url
 Environment=PARSER_BIND_ADDR=127.0.0.1:8283
 ExecStart=/usr/bin/python3 -m uvicorn parser.main:app --host 127.0.0.1 --port 8283
 Restart=on-failure
 RestartSec=10s
-WorkingDirectory=/opt/nimoos-parser
+TimeoutStopSec=30
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nimoos-parser
 
 [Install]
 WantedBy=multi-user.target
