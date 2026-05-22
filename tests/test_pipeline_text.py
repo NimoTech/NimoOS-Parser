@@ -60,6 +60,24 @@ def test_pipeline_indexes_markdown_file(setup):
     assert "Title" in payload["text"]
 
 
+def test_pipeline_writes_vector_count(setup):
+    conn, qstore, bge, tmp_path = setup
+    p = tmp_path / "doc.md"
+    p.write_text(
+        "# Title\n\nIntro paragraph with enough words to pass min_tokens filter. " * 5,
+        encoding="utf-8",
+    )
+    pipe = TextPipeline(conn, qstore=qstore, embedder=bge,
+                        parser_version="parser/0.1.0")
+    pipe.index_file(root_id="root1", path=str(p), now_ms=100)
+    expected = len(qstore.upserts)
+    row = conn.execute(
+        "SELECT vector_count FROM file_records WHERE tombstoned_at IS NULL"
+    ).fetchone()
+    assert row["vector_count"] == expected
+    assert expected > 0
+
+
 def test_pipeline_appends_root_for_known_file(setup):
     conn, qstore, bge, tmp_path = setup
     p = tmp_path / "doc.md"

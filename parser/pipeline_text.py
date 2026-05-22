@@ -131,6 +131,10 @@ class TextPipeline:
             modalities_done={"text": self.embedder.version},
             parser_version=self.parser_version, indexed_at=now_ms,
         )
+        self.conn.execute(
+            "UPDATE file_records SET vector_count = ? WHERE file_id = ?",
+            (len(points), file_id),
+        )
 
     def delete_path(self, *, root_id: str, path: str, now_ms: int) -> None:
         row = self.conn.execute(
