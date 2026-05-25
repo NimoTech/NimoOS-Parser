@@ -12,7 +12,7 @@ class BGEReranker:
         self._model = model
 
     @classmethod
-    def load(cls, *, use_fp16: bool = False) -> "BGEReranker":
+    def load(cls, *, use_fp16: bool = True) -> "BGEReranker":
         if cls._instance is None:
             from FlagEmbedding import FlagReranker  # deferred
             model = FlagReranker("BAAI/bge-reranker-v2-m3", use_fp16=use_fp16)

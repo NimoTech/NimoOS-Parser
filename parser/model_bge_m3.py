@@ -13,7 +13,7 @@ class BGEM3:
         self._model = model
 
     @classmethod
-    def load(cls, *, use_fp16: bool = False) -> "BGEM3":
+    def load(cls, *, use_fp16: bool = True) -> "BGEM3":
         if cls._instance is None:
             from FlagEmbedding import BGEM3FlagModel  # deferred until first use
             model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=use_fp16)
@@ -26,8 +26,8 @@ class BGEM3:
             return_dense=True,
             return_sparse=True,
             return_colbert_vecs=False,
-            batch_size=16,
-            max_length=8192,
+            batch_size=8,
+            max_length=1024,
         )
         out = []
         for i, _ in enumerate(texts):
