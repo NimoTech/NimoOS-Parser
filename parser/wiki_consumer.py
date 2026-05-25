@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import posixpath
 import sqlite3
 import time
 
@@ -8,15 +9,37 @@ from parser.repo_models import get_wiki_cursor, set_wiki_cursor
 
 log = logging.getLogger("parser.wiki_consumer")
 
+# 文本类白名单:有正式 text pipeline 支持的扩展。
+# MOV/MP4/JPG 等视觉类等 visual pipeline 上线后再开。
+TEXT_EXT_ALLOWLIST = {
+    ".md", ".txt", ".rst",
+    ".pdf", ".docx", ".odt",
+    ".html", ".htm", ".xml",
+    ".py", ".go", ".js", ".ts", ".jsx", ".tsx",
+    ".java", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".rb", ".rs", ".php",
+    ".sh", ".bash", ".zsh", ".fish",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".env",
+    ".csv", ".tsv", ".sql",
+    ".log",
+}
+
+
+def _is_text_indexable(path: str) -> bool:
+    ext = posixpath.splitext(path)[1].lower()
+    return ext in TEXT_EXT_ALLOWLIST
+
 
 def _op_for_event(ev: dict) -> str | None:
     if ev.get("is_dir"):
         return None
     op = ev.get("op")
-    if op in ("create", "modify", "rename"):
-        return "index"
     if op == "delete":
+        # delete 任何路径都转发(让 parser 清掉可能存在的旧向量)
         return "delete"
+    if op in ("create", "modify", "rename"):
+        if not _is_text_indexable(ev.get("path", "")):
+            return None
+        return "index"
     return None
 
 
