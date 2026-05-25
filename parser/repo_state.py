@@ -6,6 +6,10 @@ def get_state(conn: sqlite3.Connection) -> dict:
     row = conn.execute(
         "SELECT paused, concurrency FROM parser_state WHERE id = 1"
     ).fetchone()
+    if row is None:
+        raise RuntimeError(
+            "parser_state row missing — run init_db first to seed the singleton"
+        )
     return {"paused": bool(row[0]), "concurrency": int(row[1])}
 
 
@@ -19,6 +23,7 @@ def set_paused(conn: sqlite3.Connection, paused: bool) -> None:
 
 
 def set_concurrency(conn: sqlite3.Connection, n: int) -> None:
+    # 1 / 2 / 4 are the three UI-exposed worker-pool sizing presets (省电/平衡/全力)
     if n not in (1, 2, 4):
         raise ValueError(f"concurrency must be 1, 2, or 4; got {n}")
     now_ms = int(time.time() * 1000)

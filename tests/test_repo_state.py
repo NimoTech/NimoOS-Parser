@@ -31,3 +31,9 @@ def test_set_concurrency_persists(conn: sqlite3.Connection):
     assert get_state(conn)["concurrency"] == 4
     set_concurrency(conn, 1)
     assert get_state(conn)["concurrency"] == 1
+
+
+@pytest.mark.parametrize("bad", [0, 3, 5, 8, -1])
+def test_set_concurrency_rejects_invalid_values(conn: sqlite3.Connection, bad: int):
+    with pytest.raises(ValueError):
+        set_concurrency(conn, bad)
