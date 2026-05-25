@@ -63,6 +63,8 @@ class WorkerPool:
     async def set_concurrency(self, n: int) -> None:
         if n < 1:
             raise ValueError(f"concurrency must be >=1, got {n}")
+        if self._stop.is_set():
+            raise RuntimeError("cannot set_concurrency on a stopped pool")
         async with self._concurrency_lock:
             current = len(self._tasks)
             if n > current:

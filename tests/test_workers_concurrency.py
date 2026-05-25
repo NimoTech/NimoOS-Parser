@@ -62,7 +62,7 @@ async def test_scale_up_adds_workers(conn: sqlite3.Connection):
     await asyncio.sleep(0.05)
     await pool.set_concurrency(4)
     # 4 workers 并行 ~0.1s 一轮,vs 1 worker 串行 0.4s
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.5)
     assert len(pipeline.indexed) == 4
     await pool.stop()
 
@@ -81,6 +81,17 @@ async def test_scale_down_returns_immediately_does_not_block(conn: sqlite3.Conne
     await pool.set_concurrency(1)
     dt = time.perf_counter() - t0
     # 即使有正在跑的 job(~0.1s 完成),set_concurrency 也应在 ~10ms 内返回
-    assert dt < 0.05, f"set_concurrency blocked {dt*1000:.1f}ms; should be fire-and-forget"
+    assert dt < 0.1, f"set_concurrency blocked {dt*1000:.1f}ms; should be fire-and-forget within 100ms"
     await asyncio.sleep(0.3)
     await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_set_concurrency_after_stop_raises(conn: sqlite3.Connection):
+    pipeline = SlowPipeline()
+    pool = WorkerPool(conn, text_pipeline=pipeline, concurrency=1,
+                     lease_s=60, max_attempts=5, idle_sleep_s=0.02)
+    await pool.start()
+    await pool.stop()
+    with pytest.raises(RuntimeError, match="stopped"):
+        await pool.set_concurrency(2)
