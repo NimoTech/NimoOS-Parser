@@ -27,6 +27,8 @@ class WorkerPool:
         self.parser_version = parser_version
         self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
+        self._run_event = asyncio.Event()
+        self._run_event.set()   # 默认运行
 
     async def start(self) -> None:
         self._stop.clear()
@@ -40,8 +42,25 @@ class WorkerPool:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
 
+    async def pause(self) -> None:
+        self._run_event.clear()
+
+    async def resume(self) -> None:
+        self._run_event.set()
+
     async def _loop(self, worker_id: int) -> None:
         while not self._stop.is_set():
+            if not self._run_event.is_set():
+                # paused: 等 resume / stop 任一
+                wait_run = asyncio.create_task(self._run_event.wait())
+                wait_stop = asyncio.create_task(self._stop.wait())
+                done, pending = await asyncio.wait(
+                    [wait_run, wait_stop],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
+                continue
             now = int(time.time() * 1000)
             job = await asyncio.to_thread(
                 dequeue_job, self.conn, lease_s=self.lease_s, now_ms=now,
