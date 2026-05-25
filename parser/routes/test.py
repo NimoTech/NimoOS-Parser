@@ -64,7 +64,19 @@ async def analyze(
     query: str | None = Form(default=None),
     embed: bool = Form(default=True),
     rerank: bool = Form(default=False),
+    target_tokens: int = Form(default=600),
+    overlap_tokens: int = Form(default=80),
+    min_tokens: int = Form(default=2),
 ) -> dict:
+    # Bound chunk params so a wild value doesn't OOM the sandbox.
+    if not (50 <= target_tokens <= 4000):
+        raise HTTPException(400, "target_tokens must be in [50, 4000]")
+    if not (0 <= overlap_tokens <= 400):
+        raise HTTPException(400, "overlap_tokens must be in [0, 400]")
+    if not (1 <= min_tokens <= 200):
+        raise HTTPException(400, "min_tokens must be in [1, 200]")
+    if overlap_tokens >= target_tokens:
+        raise HTTPException(400, "overlap_tokens must be smaller than target_tokens")
     raw = await file.read()
     if len(raw) > _MAX_BYTES:
         raise HTTPException(
@@ -91,14 +103,22 @@ async def analyze(
 
     text = raw.decode("utf-8", errors="replace")
 
-    # min_tokens=2 for sandbox so even short snippets produce chunks the
-    # user can inspect; production pipelines stay at the higher defaults.
+    # chunk_markdown / chunk_source don't accept overlap_tokens — silently
+    # ignored for those types (the UI input is still useful when comparing
+    # against the plain chunker output for the same file).
     if chunker_kind == "markdown":
-        chunks = chunk_markdown(text, min_tokens=2)
+        chunks = chunk_markdown(
+            text, target_tokens=target_tokens, min_tokens=min_tokens,
+        )
     elif chunker_kind == "source":
-        chunks = chunk_source(text, min_tokens=2)
+        chunks = chunk_source(
+            text, target_tokens=target_tokens, min_tokens=min_tokens,
+        )
     else:
-        chunks = chunk_plain(text, min_tokens=2)
+        chunks = chunk_plain(
+            text, target_tokens=target_tokens,
+            overlap_tokens=overlap_tokens, min_tokens=min_tokens,
+        )
 
     out_chunks: list[dict] = []
     vectors: list[list[float]] = []
@@ -135,6 +155,12 @@ async def analyze(
         "text_length": len(text),
         "chunk_count": len(chunks),
         "chunks": out_chunks,
+        "params_used": {
+            "target_tokens": target_tokens,
+            "overlap_tokens": overlap_tokens if chunker_kind == "plain" else 0,
+            "min_tokens": min_tokens,
+            "chunker": chunker_kind,
+        },
     }
 
     if query and chunks and embed:
