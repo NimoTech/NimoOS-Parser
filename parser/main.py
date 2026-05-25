@@ -38,8 +38,9 @@ class _LazyBGEM3Adapter:
         self.dim = BGEM3.dim
 
     def embed_text(self, texts: list[str]) -> list[dict]:
+        from parser.device import current_device
         from parser.model_bge_m3 import BGEM3
-        return BGEM3.load().embed_text(texts)
+        return BGEM3.load(device=current_device(app_state.conn)).embed_text(texts)
 
 
 def _read_wiki_url(discovery_path: Path) -> Optional[str]:

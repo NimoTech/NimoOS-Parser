@@ -44,3 +44,19 @@ def detect_profile() -> Profile:
     if _total_ram_bytes() >= 16 * 1024**3:
         return Profile.BALANCED
     return Profile.LEAN
+
+
+def resolve_device(device_pref: str) -> str:
+    """Resolve a user device preference (auto|cuda|cpu) to an actual torch device.
+
+    'auto' picks 'cuda' if an NVIDIA GPU is present, else 'cpu'. 'cuda' and
+    'cpu' are returned as-is; 'cuda' is honoured even when no GPU is detected
+    so the model load surface raises a clean error instead of silently
+    downgrading.
+    """
+    pref = (device_pref or "auto").lower()
+    if pref == "auto":
+        return "cuda" if _has_nvidia_gpu() else "cpu"
+    if pref in ("cuda", "cpu"):
+        return pref
+    raise ValueError(f"unknown device preference: {device_pref!r}")

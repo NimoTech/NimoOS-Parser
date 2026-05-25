@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from parser.db import init_db
-from parser.repo_state import get_state, set_paused, set_concurrency
+from parser.repo_state import get_state, set_paused, set_concurrency, set_device
 
 
 @pytest.fixture
@@ -17,6 +17,19 @@ def test_default_state_after_init(conn: sqlite3.Connection):
     st = get_state(conn)
     assert st["paused"] is False
     assert st["concurrency"] == 2
+    assert st["device"] == "auto"
+
+
+@pytest.mark.parametrize("device", ["auto", "cuda", "cpu"])
+def test_set_device_persists(conn: sqlite3.Connection, device: str):
+    set_device(conn, device)
+    assert get_state(conn)["device"] == device
+
+
+@pytest.mark.parametrize("bad", ["tpu", "GPU", "", "xpu"])
+def test_set_device_rejects_invalid(conn: sqlite3.Connection, bad: str):
+    with pytest.raises(ValueError):
+        set_device(conn, bad)
 
 
 def test_set_paused_persists(conn: sqlite3.Connection):

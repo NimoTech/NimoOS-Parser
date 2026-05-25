@@ -32,8 +32,10 @@ class RerankResponse(BaseModel):
 
 
 def get_reranker():
+    from parser.device import current_device
+    from parser.main import app_state
     from parser.model_reranker import BGEReranker
-    return BGEReranker.load()
+    return BGEReranker.load(device=current_device(app_state.conn))
 
 
 @router.post("/rerank", response_model=RerankResponse)

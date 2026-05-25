@@ -64,10 +64,18 @@ CREATE TABLE IF NOT EXISTS parser_state (
   id          INTEGER PRIMARY KEY CHECK (id = 1),
   paused      INTEGER NOT NULL DEFAULT 0,
   concurrency INTEGER NOT NULL DEFAULT 2,
+  device      TEXT NOT NULL DEFAULT 'auto',
   updated_at  INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO parser_state (id, paused, concurrency, updated_at)
-VALUES (1, 0, 2, strftime('%s','now')*1000);
+INSERT OR IGNORE INTO parser_state (id, paused, concurrency, device, updated_at)
+VALUES (1, 0, 2, 'auto', strftime('%s','now')*1000);
+"""
+
+# Migration for existing parser_state tables that predate the `device` column.
+# SQLite cannot add NOT NULL DEFAULT in one shot on every version, but
+# `ALTER TABLE ... ADD COLUMN` with default works on 3.35+, which is what we ship.
+_MIGRATIONS_SQL = """
+ALTER TABLE parser_state ADD COLUMN device TEXT NOT NULL DEFAULT 'auto';
 """
 
 
@@ -81,6 +89,16 @@ def init_db(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA temp_store = MEMORY")
+    # Run column-add migrations BEFORE executescript, because SCHEMA_SQL
+    # contains an `INSERT OR IGNORE` that names the new column — if the
+    # column hasn't been backfilled on an existing DB, that insert fails
+    # and aborts the whole executescript.
+    cols = {
+        r[1] for r in conn.execute("PRAGMA table_info(parser_state)").fetchall()
+    }
+    if cols and "device" not in cols:
+        conn.executescript(_MIGRATIONS_SQL)
+
     conn.executescript(SCHEMA_SQL)
     # ensure wiki_cursor singleton
     conn.execute(

@@ -2,7 +2,31 @@ def test_get_state_default(client):
     r = client.get("/v1/parser/control/state")
     assert r.status_code == 200
     body = r.json()
-    assert body == {"paused": False, "concurrency": 2}
+    assert body["paused"] is False
+    assert body["concurrency"] == 2
+    assert body["device"] == "auto"
+    assert body["resolved_device"] in ("cuda", "cpu")
+
+
+def test_set_device_valid(client):
+    for device in ("cpu", "cuda", "auto"):
+        r = client.post("/v1/parser/control/device", json={"device": device})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["device"] == device
+        assert body["resolved_device"] in ("cuda", "cpu")
+        # state endpoint reflects the change
+        assert client.get("/v1/parser/control/state").json()["device"] == device
+
+
+def test_set_device_invalid_returns_400(client):
+    r = client.post("/v1/parser/control/device", json={"device": "tpu"})
+    assert r.status_code == 400
+
+
+def test_set_device_missing_field_returns_422(client):
+    r = client.post("/v1/parser/control/device", json={})
+    assert r.status_code == 422
 
 
 def test_pause_then_state_shows_paused(client):
