@@ -193,17 +193,22 @@ async def _lifespan(app: FastAPI):
         except Exception as e:
             log.warning("write_url failed: %s", e)
 
+    opened_conn_here = False
     if app.state.skip_workers:
         # Even in skip_workers mode, open DB so control routes can read state.
-        try:
-            from parser.config import load_settings
-            from parser.db import init_db
-            settings = load_settings()
-            app_state.settings = settings
-            settings.data_path.mkdir(parents=True, exist_ok=True)
-            app_state.conn = init_db(settings.data_path / "parser.db")
-        except Exception as e:
-            log.warning("skip_workers DB init failed: %s", e)
+        # Guard: if a test fixture already injected app_state.conn, respect it
+        # and do NOT open (or later close) the production DB.
+        if app_state.conn is None:
+            try:
+                from parser.config import load_settings
+                from parser.db import init_db
+                settings = load_settings()
+                app_state.settings = settings
+                settings.data_path.mkdir(parents=True, exist_ok=True)
+                app_state.conn = init_db(settings.data_path / "parser.db")
+                opened_conn_here = True
+            except Exception as e:
+                log.warning("skip_workers DB init failed: %s", e)
     else:
         try:
             await _full_lifecycle_startup(app)
@@ -222,8 +227,8 @@ async def _lifespan(app: FastAPI):
         yield
     finally:
         if app.state.skip_workers:
-            # Close the minimal DB opened in skip_workers mode.
-            if app_state.conn is not None:
+            # Only close the DB if this lifespan opened it (not a test-injected conn).
+            if opened_conn_here and app_state.conn is not None:
                 try:
                     app_state.conn.close()
                 except Exception:
