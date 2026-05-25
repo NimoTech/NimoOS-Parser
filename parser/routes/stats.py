@@ -33,8 +33,12 @@ async def stats() -> dict:
     indexed_files = conn.execute(
         "SELECT COUNT(*) FROM file_records WHERE tombstoned_at IS NULL"
     ).fetchone()[0]
+    done = conn.execute(
+        "SELECT COUNT(*) FROM parse_jobs WHERE done_at IS NOT NULL"
+    ).fetchone()[0]
     return {
-        "queue_depth": {"pending": pending, "running": running, "failed": failed},
+        "queue_depth": {"pending": pending, "running": running,
+                        "failed": failed, "done": done},
         "indexed_files": indexed_files,
         "total_vectors_text": counts["text"],
         "total_vectors_visual": counts["visual"],
