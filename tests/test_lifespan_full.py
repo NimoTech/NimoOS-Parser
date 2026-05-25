@@ -97,15 +97,16 @@ def test_full_lifecycle_reads_wiki_url(tmp_path, monkeypatch):
         assert app_state.consumer is not None
 
 
-def test_skip_workers_does_not_init_anything(tmp_path, monkeypatch):
+def test_skip_workers_does_not_start_worker_pool(tmp_path, monkeypatch):
     _set_env(monkeypatch, tmp_path)
     from parser.main import create_app, app_state
     app = create_app(skip_workers=True)
     with TestClient(app) as c:
-        # No DB, no qstore, no consumer, no pool — skip_workers means skip all
-        assert app_state.conn is None
+        # DB is opened so that control routes can read state, even without workers
+        assert app_state.conn is not None
+        # DB file IS created
+        assert (tmp_path / "data" / "parser.db").exists()
+        # Worker-related state is NOT started
         assert app_state.qstore is None
         assert app_state.consumer is None
         assert app_state.worker_pool is None
-        # DB file NOT created
-        assert not (tmp_path / "data" / "parser.db").exists()
