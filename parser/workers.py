@@ -28,7 +28,8 @@ class WorkerPool:
         self._tasks: list[asyncio.Task] = []
         self._stop = asyncio.Event()
         self._run_event = asyncio.Event()
-        self._run_event.set()   # 默认运行
+        # set = running, clear = paused (Python asyncio has no wait-until-cleared API)
+        self._run_event.set()
 
     async def start(self) -> None:
         self._stop.clear()
@@ -54,12 +55,19 @@ class WorkerPool:
                 # paused: 等 resume / stop 任一
                 wait_run = asyncio.create_task(self._run_event.wait())
                 wait_stop = asyncio.create_task(self._stop.wait())
-                done, pending = await asyncio.wait(
-                    [wait_run, wait_stop],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
+                try:
+                    done, pending = await asyncio.wait(
+                        [wait_run, wait_stop],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except asyncio.CancelledError:
+                    wait_run.cancel()
+                    wait_stop.cancel()
+                    await asyncio.gather(wait_run, wait_stop, return_exceptions=True)
+                    raise
                 for p in pending:
                     p.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
                 continue
             now = int(time.time() * 1000)
             job = await asyncio.to_thread(

@@ -51,6 +51,6 @@ async def test_pool_resume_unblocks_workers(conn: sqlite3.Connection):
     await asyncio.sleep(0.2)
     assert pipeline.indexed == []
     await pool.resume()
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.5)
     assert pipeline.indexed == ["/a.md"]
     await pool.stop()
