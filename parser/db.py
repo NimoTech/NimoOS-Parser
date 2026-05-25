@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS wiki_cursor (
   since_ms    INTEGER NOT NULL DEFAULT 0,
   updated_at  INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS parser_state (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  paused      INTEGER NOT NULL DEFAULT 0,
+  concurrency INTEGER NOT NULL DEFAULT 2,
+  updated_at  INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO parser_state (id, paused, concurrency, updated_at)
+VALUES (1, 0, 2, strftime('%s','now')*1000);
 """
 
 
