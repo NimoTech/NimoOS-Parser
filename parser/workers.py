@@ -25,7 +25,10 @@ class WorkerPool:
         self.idle_sleep_s = idle_sleep_s
         self.wiki_client = wiki_client
         self.parser_version = parser_version
-        self._tasks: list[asyncio.Task] = []
+        self._tasks: list[tuple[int, asyncio.Task]] = []
+        self._worker_id_seq: int = 0
+        self._worker_exit_flags: dict[int, asyncio.Event] = {}
+        self._concurrency_lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._run_event = asyncio.Event()
         # set = running, clear = paused (Python asyncio has no wait-until-cleared API)
@@ -33,15 +36,23 @@ class WorkerPool:
 
     async def start(self) -> None:
         self._stop.clear()
-        for i in range(self.concurrency):
-            self._tasks.append(asyncio.create_task(self._loop(i)))
+        async with self._concurrency_lock:
+            for _ in range(self.concurrency):
+                wid = self._worker_id_seq
+                self._worker_id_seq += 1
+                flag = asyncio.Event()
+                self._worker_exit_flags[wid] = flag
+                t = asyncio.create_task(self._loop(wid))
+                self._tasks.append((wid, t))
 
     async def stop(self) -> None:
         self._stop.set()
-        for t in self._tasks:
+        tasks = [t for _, t in self._tasks]
+        for t in tasks:
             t.cancel()
-        await asyncio.gather(*self._tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
+        self._worker_exit_flags.clear()
 
     async def pause(self) -> None:
         self._run_event.clear()
@@ -49,25 +60,54 @@ class WorkerPool:
     async def resume(self) -> None:
         self._run_event.set()
 
+    async def set_concurrency(self, n: int) -> None:
+        if n < 1:
+            raise ValueError(f"concurrency must be >=1, got {n}")
+        async with self._concurrency_lock:
+            current = len(self._tasks)
+            if n > current:
+                for _ in range(n - current):
+                    wid = self._worker_id_seq
+                    self._worker_id_seq += 1
+                    flag = asyncio.Event()
+                    self._worker_exit_flags[wid] = flag
+                    t = asyncio.create_task(self._loop(wid))
+                    self._tasks.append((wid, t))
+            elif n < current:
+                to_drain = self._tasks[n:]
+                self._tasks = self._tasks[:n]
+                for wid, _ in to_drain:
+                    self._worker_exit_flags[wid].set()
+                asyncio.create_task(self._drain_workers(to_drain))
+            self.concurrency = n
+
+    async def _drain_workers(
+        self, draining: list[tuple[int, asyncio.Task]]
+    ) -> None:
+        await asyncio.gather(*(t for _, t in draining), return_exceptions=True)
+        for wid, _ in draining:
+            self._worker_exit_flags.pop(wid, None)
+
     async def _loop(self, worker_id: int) -> None:
-        while not self._stop.is_set():
+        exit_flag = self._worker_exit_flags[worker_id]
+        while not self._stop.is_set() and not exit_flag.is_set():
             if not self._run_event.is_set():
-                # paused: 等 resume / stop 任一
                 wait_run = asyncio.create_task(self._run_event.wait())
                 wait_stop = asyncio.create_task(self._stop.wait())
+                wait_exit = asyncio.create_task(exit_flag.wait())
                 try:
                     done, pending = await asyncio.wait(
-                        [wait_run, wait_stop],
+                        [wait_run, wait_stop, wait_exit],
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    for p in pending:
+                        p.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
                 except asyncio.CancelledError:
-                    wait_run.cancel()
-                    wait_stop.cancel()
-                    await asyncio.gather(wait_run, wait_stop, return_exceptions=True)
+                    for w in (wait_run, wait_stop, wait_exit):
+                        w.cancel()
+                    await asyncio.gather(wait_run, wait_stop, wait_exit, return_exceptions=True)
                     raise
-                for p in pending:
-                    p.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
                 continue
             now = int(time.time() * 1000)
             job = await asyncio.to_thread(
