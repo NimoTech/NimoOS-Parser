@@ -102,14 +102,20 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
             embedder=_LazyBGEM3Adapter(),
             parser_version=settings.parser_version,
         )
+        from parser.repo_state import get_state
+        _state = get_state(app_state.conn)
+        # Use DB-persisted concurrency as the initial value for the pool.
         app_state.worker_pool = WorkerPool(
             app_state.conn, text_pipeline=pipeline,
-            concurrency=settings.worker_text_concurrency,
+            concurrency=_state["concurrency"],
             lease_s=settings.job_lease_s,
             wiki_client=app_state.wiki_client,
             parser_version=settings.parser_version,
         )
         await app_state.worker_pool.start()
+        # If user had paused the parser in a previous session, apply it now.
+        if _state["paused"]:
+            await app_state.worker_pool.pause()
 
     if app_state.wiki_client is not None:
         app_state.consumer = WikiConsumer(
@@ -187,7 +193,18 @@ async def _lifespan(app: FastAPI):
         except Exception as e:
             log.warning("write_url failed: %s", e)
 
-    if not app.state.skip_workers:
+    if app.state.skip_workers:
+        # Even in skip_workers mode, open DB so control routes can read state.
+        try:
+            from parser.config import load_settings
+            from parser.db import init_db
+            settings = load_settings()
+            app_state.settings = settings
+            settings.data_path.mkdir(parents=True, exist_ok=True)
+            app_state.conn = init_db(settings.data_path / "parser.db")
+        except Exception as e:
+            log.warning("skip_workers DB init failed: %s", e)
+    else:
         try:
             await _full_lifecycle_startup(app)
         except Exception as e:
@@ -204,7 +221,15 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if not app.state.skip_workers:
+        if app.state.skip_workers:
+            # Close the minimal DB opened in skip_workers mode.
+            if app_state.conn is not None:
+                try:
+                    app_state.conn.close()
+                except Exception:
+                    pass
+                app_state.conn = None
+        else:
             await _full_lifecycle_shutdown()
         if discovery_path:
             try:
