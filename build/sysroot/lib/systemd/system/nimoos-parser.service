@@ -12,7 +12,8 @@ WorkingDirectory=/opt/nimoos-parser
 Environment=PYTHONPATH=/opt/nimoos-parser
 Environment=PARSER_DISCOVERY_FILE=/var/run/nimoos/parser.url
 Environment=PARSER_BIND_ADDR=127.0.0.1:8283
-ExecStart=/usr/bin/python3 -m uvicorn parser.main:app --host 127.0.0.1 --port 8283
+Environment=HF_HOME=/opt/nimoos-parser/hf-cache
+ExecStart=/opt/nimoos-parser/venv/bin/python -m uvicorn parser.main:app --host 127.0.0.1 --port 8283
 Restart=on-failure
 RestartSec=10s
 TimeoutStopSec=30

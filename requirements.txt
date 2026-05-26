@@ -1,10 +1,27 @@
+# ---- HTTP / runtime ----
 fastapi>=0.115
 uvicorn[standard]>=0.30
 httpx>=0.27
 pydantic>=2.7
 sdnotify>=0.3
+python-multipart>=0.0.20
+
+# ---- 向量库 / embedding / reranker ----
 qdrant-client[fastembed]>=1.10
 FlagEmbedding>=1.2.10
+
+# ---- 文档转换 (PDF / DOCX / PPTX / XLSX / HTML) ----
+# docling 会把 torch / torchvision / transformers 作为传递依赖拉进来。
+# GPU 用户:如需 CUDA 版 torch,请单独跑 `pip install --index-url <pytorch-cuda-wheel> torch torchvision`
+# 再装 docling,顺序无所谓但 GPU wheel 要先就位。
+docling>=2.50
+
+# ---- OCR(扫描件 / 图片型 PDF)----
+# 当前 CPU only;wheel 自带 3 个 ONNX 模型,离线可用。
+# GPU OCR 需要 onnxruntime-gpu,但 CUDA 13.2 还没对应 wheel,等 ort 1.21+。
+rapidocr-onnxruntime>=1.4
+
+# ---- 测试 ----
 pytest>=8.0
 pytest-asyncio>=0.24
 pytest-httpx>=0.30
