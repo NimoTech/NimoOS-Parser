@@ -123,6 +123,10 @@ class TextPipeline:
                 parser_version=self.parser_version, indexed_at=now_ms,
             )
             return
+        try:
+            mtime_ms = int(os.path.getmtime(path) * 1000)
+        except OSError:
+            mtime_ms = now_ms  # fallback if file vanished mid-pipeline
         embeddings = self.embedder.embed_text([c["text"] for c in chunks])
         root_ids = self._collect_root_ids(file_id)
         if not root_ids:
@@ -150,6 +154,7 @@ class TextPipeline:
                     "embed_model_version": self.embedder.version,
                     "source_model_version": "",
                     "indexed_at": now_ms,
+                    "mtime_ms": mtime_ms,
                     "tombstoned_at": None,
                 },
             })
