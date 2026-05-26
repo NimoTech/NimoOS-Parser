@@ -71,6 +71,24 @@ CREATE TABLE IF NOT EXISTS parser_state (
 INSERT OR IGNORE INTO parser_state
   (id, paused, concurrency, device, ocr_enabled, updated_at)
 VALUES (1, 0, 2, 'auto', 0, strftime('%s','now')*1000);
+
+CREATE TABLE IF NOT EXISTS allowlist_extensions (
+  ext TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'default',
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS allowlist_folders (
+  id TEXT PRIMARY KEY,
+  root_id TEXT NOT NULL,
+  path_glob TEXT NOT NULL,
+  action TEXT NOT NULL CHECK(action IN ('allow','deny')),
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_allowlist_folders_root
+  ON allowlist_folders(root_id);
 """
 
 # Column-add migrations for parser_state tables created before each new
@@ -107,5 +125,14 @@ def init_db(path: Path) -> sqlite3.Connection:
     conn.execute(
         "INSERT OR IGNORE INTO wiki_cursor(id, since_ms, updated_at) VALUES (1, 0, ?)",
         (int(time.time() * 1000),),
+    )
+    # Seed allowlist_extensions from the legacy constant on first run.
+    # On subsequent runs, INSERT OR IGNORE keeps user toggles intact.
+    from parser.wiki_consumer import TEXT_EXT_ALLOWLIST
+    now_ms = int(time.time() * 1000)
+    conn.executemany(
+        "INSERT OR IGNORE INTO allowlist_extensions(ext, enabled, source, updated_at) "
+        "VALUES (?, 1, 'default', ?)",
+        [(ext, now_ms) for ext in sorted(TEXT_EXT_ALLOWLIST)],
     )
     return conn
