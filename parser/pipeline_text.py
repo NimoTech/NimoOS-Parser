@@ -73,16 +73,16 @@ class TextPipeline:
     def _run_full(self, *, root_id: str, path: str, file_id: str,
                   sha256_full: str, now_ms: int) -> None:
         from parser.docling_extractor import DoclingExtractor, is_docling_format
-        from parser.wiki_consumer import TEXT_EXT_ALLOWLIST
+        from parser import repo_allowlist
         size = os.path.getsize(path)
         ext = Path(path).suffix.lower()
 
         # 防御:wiki_consumer 已经按 allowlist 过滤过事件,但 rescan / 历史 job
-        # 也走这里。任何不在 allowlist 的扩展名都不应该被 decode + embed,
-        # 否则 .sql.gz / .mov / .jpeg 这种二进制会被当成 text/plain 喂进向量库。
-        if ext not in TEXT_EXT_ALLOWLIST:
-            log.warning("skipped: extension %s not in text allowlist (path=%s)",
-                        ext, path)
+        # 也走这里。allowlist 由 DB 持有,这是单一真理源 —— wiki_consumer 也走
+        # 同一个函数,确保两处永远不会出现"一处过滤一处没过滤"的污染。
+        if not repo_allowlist.is_path_indexable(self.conn, root_id=root_id,
+                                                 path=path):
+            log.warning("skipped: not indexable per allowlist (path=%s)", path)
             return
 
         if is_docling_format(ext):

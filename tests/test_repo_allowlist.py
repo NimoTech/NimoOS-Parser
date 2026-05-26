@@ -87,3 +87,52 @@ def test_folder_rule_only_matches_own_root(conn):
                        path_glob="/Downloads/*", action="deny")
     assert ra.is_path_indexable(conn, root_id="r2",
                                  path="/Downloads/a.pdf") is True
+
+
+def test_wiki_consumer_uses_db_not_constant(conn, monkeypatch):
+    """Disabling .pdf in DB should make consumer skip a .pdf event,
+    even though .pdf is in the legacy TEXT_EXT_ALLOWLIST constant."""
+    from parser.wiki_consumer import _op_for_event
+    # Inject our test conn into the module's _get_conn so the helper
+    # uses it instead of app_state.conn.
+    monkeypatch.setattr("parser.wiki_consumer._get_conn", lambda: conn)
+    ra.set_extension_enabled(conn, ".pdf", False)
+    ev = {"op": "create", "path": "/x/y.pdf", "root_id": "r1", "is_dir": False}
+    assert _op_for_event(ev) is None
+
+    # Sanity: with .pdf re-enabled, the event becomes "index"
+    ra.set_extension_enabled(conn, ".pdf", True)
+    assert _op_for_event(ev) == "index"
+
+
+def test_pipeline_text_run_full_skipped_via_db(conn, tmp_path):
+    """When DB disables .pdf, pipeline_text._run_full should early-return
+    without writing anything to the qstore."""
+    from parser import pipeline_text
+
+    # Create a tiny real file so getsize() works
+    f = tmp_path / "y.pdf"
+    f.write_bytes(b"%PDF-fake\n")
+
+    ra.set_extension_enabled(conn, ".pdf", False)
+
+    upserts = []
+
+    class StubQStore:
+        def tombstone_file(self, **kw): pass
+        def upsert_text_chunks(self, points): upserts.extend(points)
+        def delete_file(self, **kw): pass
+        def set_root_ids_for_file(self, **kw): pass
+
+    class StubEmbedder:
+        version = "test-embed"
+        def embed_text(self, texts): return []  # would crash if called
+
+    pipe = pipeline_text.TextPipeline(
+        conn=conn, qstore=StubQStore(),
+        embedder=StubEmbedder(), parser_version="test",
+    )
+    # Should early-return because .pdf is disabled in DB
+    pipe._run_full(root_id="r1", path=str(f), file_id="fid",
+                   sha256_full="abc", now_ms=1)
+    assert upserts == []  # nothing was embedded or upserted
