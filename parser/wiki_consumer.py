@@ -12,12 +12,20 @@ log = logging.getLogger("parser.wiki_consumer")
 # 文本类白名单:有正式 text pipeline 支持的扩展。
 # MOV/MP4/JPG 等视觉类等 visual pipeline 上线后再开。
 TEXT_EXT_ALLOWLIST = {
+    # raw text + markdown — plain reader
     ".md", ".txt", ".rst",
-    ".pdf", ".docx", ".odt",
+    # docling-handled (PDF / Office / web)
+    ".pdf",
+    ".docx", ".doc",
+    ".pptx", ".ppt",
+    ".xlsx", ".xls",
+    ".odt",
     ".html", ".htm", ".xml",
+    # source code — chunk_source
     ".py", ".go", ".js", ".ts", ".jsx", ".tsx",
     ".java", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".rb", ".rs", ".php",
     ".sh", ".bash", ".zsh", ".fish",
+    # structured text — chunk_plain
     ".json", ".yaml", ".yml", ".toml", ".ini", ".env",
     ".csv", ".tsv", ".sql",
     ".log",

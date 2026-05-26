@@ -69,17 +69,37 @@ class TextPipeline:
 
     def _run_full(self, *, root_id: str, path: str, file_id: str,
                   sha256_full: str, now_ms: int) -> None:
+        from parser.docling_extractor import DoclingExtractor, is_docling_format
         size = os.path.getsize(path)
         ext = Path(path).suffix.lower()
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read()
-        if ext in _MD_EXT:
+
+        if is_docling_format(ext):
+            # PDF/DOCX/PPTX/XLSX/HTML → docling → markdown → chunk_markdown.
+            # Falls back to raw read on conversion failure so a single bad
+            # PDF doesn't poison the worker; the file gets indexed as
+            # text/plain with whatever raw decode produces.
+            try:
+                text = DoclingExtractor.load(ocr=False).to_markdown(path)
+                chunks = chunk_markdown(text, min_tokens=20)
+                mime = f"text/markdown+docling/{ext.lstrip('.')}"
+            except Exception:
+                with open(path, "rb") as f:
+                    text = f.read().decode("utf-8", errors="replace")
+                chunks = chunk_plain(text, min_tokens=20)
+                mime = "text/plain"
+        elif ext in _MD_EXT:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
             chunks = chunk_markdown(text, min_tokens=20)
             mime = "text/markdown"
         elif ext in _SOURCE_EXT:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
             chunks = chunk_source(text, min_tokens=10)
             mime = "text/x-source"
         else:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
             chunks = chunk_plain(text, min_tokens=20)
             mime = "text/plain"
         if not chunks:

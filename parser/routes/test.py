@@ -22,7 +22,7 @@ _SOURCE_EXT = {".py", ".go", ".rs", ".ts", ".tsx", ".js", ".jsx", ".java",
 _TEXT_EXT = {".txt", ".rst", ".html", ".htm", ".xml", ".json", ".yaml",
              ".yml", ".toml", ".ini", ".env", ".csv", ".tsv", ".log"}
 
-_MAX_BYTES = 5 * 1024 * 1024   # 5 MiB cap to keep the sandbox fast
+_MAX_BYTES = 30 * 1024 * 1024  # 30 MiB cap — generous for real PDFs/docx
 _PREVIEW_DIMS = 8              # how many dense dims to surface per chunk
 _RERANK_TOP_K = 20             # only rerank the top-K by cosine sim
 
@@ -84,24 +84,44 @@ async def analyze(
         )
 
     ext = posixpath.splitext(file.filename or "")[1].lower()
-    if ext in _MD_EXT:
+    from parser.docling_extractor import DoclingExtractor, is_docling_format
+
+    docling_md: str | None = None  # surfaced to UI for inspection
+
+    if is_docling_format(ext):
+        # PDF/DOCX/PPTX/XLSX/HTML → docling produces markdown,
+        # then chunk_markdown handles the heading-based split.
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(
+                delete=True, suffix=ext,
+            ) as tf:
+                tf.write(raw)
+                tf.flush()
+                docling_md = DoclingExtractor.load(ocr=False).to_markdown(tf.name)
+            text = docling_md
+            mime, chunker_kind = f"text/markdown+docling/{ext.lstrip('.')}", "markdown"
+        except Exception as e:
+            raise HTTPException(
+                500,
+                f"docling failed to convert {ext}: {e}",
+            )
+    elif ext in _MD_EXT:
+        text = raw.decode("utf-8", errors="replace")
         mime, chunker_kind = "text/markdown", "markdown"
     elif ext in _SOURCE_EXT:
+        text = raw.decode("utf-8", errors="replace")
         mime, chunker_kind = "text/x-source", "source"
-    elif ext in _TEXT_EXT or ext == ".pdf":
-        # .pdf is intentionally treated as text here — sandbox does NOT
-        # ship a PDF extractor; the user gets a raw decode, which is
-        # informative for debugging "why does my PDF index poorly".
+    elif ext in _TEXT_EXT:
+        text = raw.decode("utf-8", errors="replace")
         mime, chunker_kind = "text/plain", "plain"
     else:
         raise HTTPException(
             400,
             f"extension {ext!r} not supported in test sandbox; "
-            "use .md / source code / .txt / .html / .json / .csv / .log "
-            "(PDF accepted as raw text decode for inspection only)",
+            "use .md / source code / .txt / .html / .json / .csv / .log / .pdf / "
+            ".docx / .pptx / .xlsx",
         )
-
-    text = raw.decode("utf-8", errors="replace")
 
     # chunk_markdown / chunk_source don't accept overlap_tokens — silently
     # ignored for those types (the UI input is still useful when comparing
@@ -155,6 +175,10 @@ async def analyze(
         "text_length": len(text),
         "chunk_count": len(chunks),
         "chunks": out_chunks,
+        # Surface the docling-produced markdown so users can see what the
+        # converter actually wrote before chunking. Only present when docling
+        # ran; for plain-read paths this stays absent.
+        **({"docling_markdown": docling_md} if docling_md is not None else {}),
         "params_used": {
             "target_tokens": target_tokens,
             "overlap_tokens": overlap_tokens if chunker_kind == "plain" else 0,
