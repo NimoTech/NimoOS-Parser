@@ -32,21 +32,13 @@ TEXT_EXT_ALLOWLIST = {
 }
 
 
-def _get_conn():
-    """Indirection so tests can monkeypatch the conn."""
-    from parser.main import app_state
-    return app_state.conn
-
-
-def _is_text_indexable(root_id: str, path: str,
-                        conn: sqlite3.Connection | None = None) -> bool:
+def _is_text_indexable(conn: sqlite3.Connection, root_id: str,
+                        path: str) -> bool:
     from parser import repo_allowlist
-    c = conn if conn is not None else _get_conn()
-    return repo_allowlist.is_path_indexable(c, root_id=root_id, path=path)
+    return repo_allowlist.is_path_indexable(conn, root_id=root_id, path=path)
 
 
-def _op_for_event(ev: dict,
-                  conn: sqlite3.Connection | None = None) -> str | None:
+def _op_for_event(ev: dict, conn: sqlite3.Connection) -> str | None:
     if ev.get("is_dir"):
         return None
     op = ev.get("op")
@@ -54,8 +46,8 @@ def _op_for_event(ev: dict,
         # delete 任何路径都转发(让 parser 清掉可能存在的旧向量)
         return "delete"
     if op in ("create", "modify", "rename"):
-        if not _is_text_indexable(ev.get("root_id", ""), ev.get("path", ""),
-                                  conn=conn):
+        if not _is_text_indexable(conn, ev.get("root_id", ""),
+                                  ev.get("path", "")):
             return None
         return "index"
     return None
@@ -106,7 +98,7 @@ class WikiConsumer:
         max_seen = 0
         now = int(time.time() * 1000)
         for ev in events:
-            op = _op_for_event(ev, conn=self.conn)
+            op = _op_for_event(ev, self.conn)
             detected = ev.get("detected_at", 0)
             max_seen = max(max_seen, detected)
             if op is None:

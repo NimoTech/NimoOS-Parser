@@ -89,20 +89,17 @@ def test_folder_rule_only_matches_own_root(conn):
                                  path="/Downloads/a.pdf") is True
 
 
-def test_wiki_consumer_uses_db_not_constant(conn, monkeypatch):
+def test_wiki_consumer_uses_db_not_constant(conn):
     """Disabling .pdf in DB should make consumer skip a .pdf event,
     even though .pdf is in the legacy TEXT_EXT_ALLOWLIST constant."""
     from parser.wiki_consumer import _op_for_event
-    # Inject our test conn into the module's _get_conn so the helper
-    # uses it instead of app_state.conn.
-    monkeypatch.setattr("parser.wiki_consumer._get_conn", lambda: conn)
     ra.set_extension_enabled(conn, ".pdf", False)
     ev = {"op": "create", "path": "/x/y.pdf", "root_id": "r1", "is_dir": False}
-    assert _op_for_event(ev) is None
+    assert _op_for_event(ev, conn) is None
 
     # Sanity: with .pdf re-enabled, the event becomes "index"
     ra.set_extension_enabled(conn, ".pdf", True)
-    assert _op_for_event(ev) == "index"
+    assert _op_for_event(ev, conn) == "index"
 
 
 def test_pipeline_text_run_full_skipped_via_db(conn, tmp_path):
