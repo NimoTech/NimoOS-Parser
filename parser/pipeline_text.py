@@ -1,9 +1,12 @@
+import logging
 import os
 import sqlite3
 import time
 import uuid
 from pathlib import Path
 from typing import Iterable
+
+log = logging.getLogger("parser.pipeline_text")
 
 from parser.chunk_text import chunk_markdown, chunk_plain, chunk_source
 from parser.pipeline_base import IdentityResolver, ResolveOutcome
@@ -70,8 +73,17 @@ class TextPipeline:
     def _run_full(self, *, root_id: str, path: str, file_id: str,
                   sha256_full: str, now_ms: int) -> None:
         from parser.docling_extractor import DoclingExtractor, is_docling_format
+        from parser.wiki_consumer import TEXT_EXT_ALLOWLIST
         size = os.path.getsize(path)
         ext = Path(path).suffix.lower()
+
+        # 防御:wiki_consumer 已经按 allowlist 过滤过事件,但 rescan / 历史 job
+        # 也走这里。任何不在 allowlist 的扩展名都不应该被 decode + embed,
+        # 否则 .sql.gz / .mov / .jpeg 这种二进制会被当成 text/plain 喂进向量库。
+        if ext not in TEXT_EXT_ALLOWLIST:
+            log.warning("skipped: extension %s not in text allowlist (path=%s)",
+                        ext, path)
+            return
 
         if is_docling_format(ext):
             # PDF/DOCX/PPTX/XLSX/HTML → docling → markdown → chunk_markdown.
