@@ -118,3 +118,30 @@ def retry_failed_jobs(
         """
     )
     return cur.rowcount
+
+
+class JobNotFound(Exception):
+    pass
+
+
+class JobRunning(Exception):
+    pass
+
+
+def delete_job(conn: sqlite3.Connection, job_id: int, *, now_ms: int) -> None:
+    """Delete a pending job. Raises JobRunning if locked, JobNotFound if absent."""
+    row = conn.execute(
+        "SELECT done_at, locked_until FROM parse_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+    if row is None:
+        raise JobNotFound(f"job {job_id}")
+    if row["locked_until"] and row["locked_until"] > now_ms:
+        raise JobRunning(f"job {job_id} is currently running")
+    conn.execute("DELETE FROM parse_jobs WHERE id = ?", (job_id,))
+
+
+def clear_failed_jobs(conn: sqlite3.Connection) -> int:
+    cur = conn.execute(
+        "DELETE FROM parse_jobs WHERE done_at IS NOT NULL AND last_error IS NOT NULL"
+    )
+    return cur.rowcount
