@@ -23,6 +23,8 @@ class AppState:
     worker_pool: object = None
     wiki_client: object = None
     gc_task: Optional[asyncio.Task] = None
+    tombstone_task: Optional[asyncio.Task] = None
+    tombstone_wake: Optional[asyncio.Event] = None
 
 
 app_state = AppState()
@@ -128,6 +130,13 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
 
     app_state.gc_task = asyncio.create_task(_gc_loop(settings))
 
+    app_state.tombstone_wake = asyncio.Event()
+    from parser.tombstone_task import set_wake_event, worker_loop
+    set_wake_event(app_state.tombstone_wake)
+    app_state.tombstone_task = asyncio.create_task(
+        worker_loop(app_state.conn, app_state.qstore, app_state.tombstone_wake)
+    )
+
 
 async def _gc_loop(settings) -> None:
     from parser.gc import sweep_tombstones
@@ -157,6 +166,13 @@ async def _full_lifecycle_shutdown() -> None:
         except (asyncio.CancelledError, Exception):
             pass
         app_state.gc_task = None
+    if app_state.tombstone_task is not None:
+        app_state.tombstone_task.cancel()
+        try:
+            await app_state.tombstone_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        app_state.tombstone_task = None
     if app_state.consumer is not None:
         try:
             await app_state.consumer.stop()
