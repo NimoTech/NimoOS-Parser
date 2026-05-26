@@ -6,6 +6,22 @@ def test_get_state_default(client):
     assert body["concurrency"] == 2
     assert body["device"] == "auto"
     assert body["resolved_device"] in ("cuda", "cpu")
+    assert body["ocr_enabled"] is False
+
+
+def test_set_ocr_toggles(client):
+    r = client.post("/v1/parser/control/ocr", json={"enabled": True})
+    assert r.status_code == 200
+    assert r.json() == {"ocr_enabled": True}
+    assert client.get("/v1/parser/control/state").json()["ocr_enabled"] is True
+
+    r = client.post("/v1/parser/control/ocr", json={"enabled": False})
+    assert r.json() == {"ocr_enabled": False}
+
+
+def test_set_ocr_missing_field_returns_422(client):
+    r = client.post("/v1/parser/control/ocr", json={})
+    assert r.status_code == 422
 
 
 def test_set_device_valid(client):

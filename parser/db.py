@@ -65,18 +65,19 @@ CREATE TABLE IF NOT EXISTS parser_state (
   paused      INTEGER NOT NULL DEFAULT 0,
   concurrency INTEGER NOT NULL DEFAULT 2,
   device      TEXT NOT NULL DEFAULT 'auto',
+  ocr_enabled INTEGER NOT NULL DEFAULT 0,
   updated_at  INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO parser_state (id, paused, concurrency, device, updated_at)
-VALUES (1, 0, 2, 'auto', strftime('%s','now')*1000);
+INSERT OR IGNORE INTO parser_state
+  (id, paused, concurrency, device, ocr_enabled, updated_at)
+VALUES (1, 0, 2, 'auto', 0, strftime('%s','now')*1000);
 """
 
-# Migration for existing parser_state tables that predate the `device` column.
-# SQLite cannot add NOT NULL DEFAULT in one shot on every version, but
-# `ALTER TABLE ... ADD COLUMN` with default works on 3.35+, which is what we ship.
-_MIGRATIONS_SQL = """
-ALTER TABLE parser_state ADD COLUMN device TEXT NOT NULL DEFAULT 'auto';
-"""
+# Column-add migrations for parser_state tables created before each new
+# column existed. Run BEFORE executescript so INSERT OR IGNORE's column
+# list doesn't reference a column SQLite hasn't added yet.
+_MIGRATION_DEVICE = "ALTER TABLE parser_state ADD COLUMN device TEXT NOT NULL DEFAULT 'auto';"
+_MIGRATION_OCR = "ALTER TABLE parser_state ADD COLUMN ocr_enabled INTEGER NOT NULL DEFAULT 0;"
 
 
 def init_db(path: Path) -> sqlite3.Connection:
@@ -97,7 +98,9 @@ def init_db(path: Path) -> sqlite3.Connection:
         r[1] for r in conn.execute("PRAGMA table_info(parser_state)").fetchall()
     }
     if cols and "device" not in cols:
-        conn.executescript(_MIGRATIONS_SQL)
+        conn.execute(_MIGRATION_DEVICE)
+    if cols and "ocr_enabled" not in cols:
+        conn.execute(_MIGRATION_OCR)
 
     conn.executescript(SCHEMA_SQL)
     # ensure wiki_cursor singleton

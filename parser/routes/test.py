@@ -67,6 +67,7 @@ async def analyze(
     target_tokens: int = Form(default=600),
     overlap_tokens: int = Form(default=80),
     min_tokens: int = Form(default=2),
+    ocr: bool = Form(default=False),
 ) -> dict:
     # Bound chunk params so a wild value doesn't OOM the sandbox.
     if not (50 <= target_tokens <= 4000):
@@ -91,6 +92,8 @@ async def analyze(
     if is_docling_format(ext):
         # PDF/DOCX/PPTX/XLSX/HTML → docling produces markdown,
         # then chunk_markdown handles the heading-based split.
+        # `ocr` is per-request in the sandbox (independent of parser_state),
+        # so the user can compare with/without OCR side-by-side.
         try:
             import tempfile
             with tempfile.NamedTemporaryFile(
@@ -98,9 +101,10 @@ async def analyze(
             ) as tf:
                 tf.write(raw)
                 tf.flush()
-                docling_md = DoclingExtractor.load(ocr=False).to_markdown(tf.name)
+                docling_md = DoclingExtractor.load(ocr=ocr).to_markdown(tf.name)
             text = docling_md
-            mime, chunker_kind = f"text/markdown+docling/{ext.lstrip('.')}", "markdown"
+            mime = f"text/markdown+docling/{ext.lstrip('.')}{'+ocr' if ocr else ''}"
+            chunker_kind = "markdown"
         except Exception as e:
             raise HTTPException(
                 500,

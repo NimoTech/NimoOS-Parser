@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from parser.db import init_db
-from parser.repo_state import get_state, set_paused, set_concurrency, set_device
+from parser.repo_state import get_state, set_paused, set_concurrency, set_device, set_ocr
 
 
 @pytest.fixture
@@ -18,6 +18,14 @@ def test_default_state_after_init(conn: sqlite3.Connection):
     assert st["paused"] is False
     assert st["concurrency"] == 2
     assert st["device"] == "auto"
+    assert st["ocr_enabled"] is False
+
+
+def test_set_ocr_persists(conn: sqlite3.Connection):
+    set_ocr(conn, True)
+    assert get_state(conn)["ocr_enabled"] is True
+    set_ocr(conn, False)
+    assert get_state(conn)["ocr_enabled"] is False
 
 
 @pytest.mark.parametrize("device", ["auto", "cuda", "cpu"])

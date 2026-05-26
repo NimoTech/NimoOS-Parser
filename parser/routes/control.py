@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from parser.hardware import resolve_device
-from parser.repo_state import get_state, set_paused, set_concurrency, set_device
+from parser.repo_state import get_state, set_paused, set_concurrency, set_device, set_ocr
 
 router = APIRouter(prefix="/v1/parser/control", tags=["control"])
 
@@ -13,6 +13,10 @@ class ConcurrencyBody(BaseModel):
 
 class DeviceBody(BaseModel):
     device: str = Field(..., description="auto | cuda | cpu")
+
+
+class OcrBody(BaseModel):
+    enabled: bool = Field(..., description="enable RapidOCR for scanned PDFs")
 
 
 def _conn():
@@ -61,6 +65,18 @@ async def set_pool_concurrency(body: ConcurrencyBody) -> dict:
     if pool is not None:
         await pool.set_concurrency(body.n)
     return {"concurrency": body.n}
+
+
+@router.post("/ocr")
+async def set_pool_ocr(body: OcrBody) -> dict:
+    """Toggle OCR (RapidOCR) for docling-converted PDFs in the indexing
+    pipeline. Unloads the cached extractor so the next ingest reloads
+    with the new OCR setting.
+    """
+    set_ocr(_conn(), body.enabled)
+    from parser.docling_extractor import DoclingExtractor
+    DoclingExtractor.unload()
+    return {"ocr_enabled": body.enabled}
 
 
 @router.post("/device")

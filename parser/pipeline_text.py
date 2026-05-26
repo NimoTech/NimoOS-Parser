@@ -75,11 +75,12 @@ class TextPipeline:
 
         if is_docling_format(ext):
             # PDF/DOCX/PPTX/XLSX/HTML → docling → markdown → chunk_markdown.
-            # Falls back to raw read on conversion failure so a single bad
-            # PDF doesn't poison the worker; the file gets indexed as
-            # text/plain with whatever raw decode produces.
+            # OCR toggled via parser_state.ocr_enabled — same singleton
+            # extractor reloads on change.
+            from parser.repo_state import get_state
+            ocr = get_state(self.conn).get("ocr_enabled", False)
             try:
-                text = DoclingExtractor.load(ocr=False).to_markdown(path)
+                text = DoclingExtractor.load(ocr=ocr).to_markdown(path)
                 chunks = chunk_markdown(text, min_tokens=20)
                 mime = f"text/markdown+docling/{ext.lstrip('.')}"
             except Exception:

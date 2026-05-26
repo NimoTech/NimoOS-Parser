@@ -43,11 +43,23 @@ class DoclingExtractor:
         # which is heavy. Service startup should not pay this cost.
         from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions, RapidOcrOptions,
+        )
 
         pdf_opts = PdfPipelineOptions()
         pdf_opts.do_ocr = ocr
         pdf_opts.do_table_structure = True
+        if ocr:
+            # RapidOCR with simplified Chinese + English. Native-Chinese
+            # engine, ONNX-runtime so it doesn't bloat the torch GPU
+            # context. force_full_page_ocr=False means docling first tries
+            # native text extraction and only OCRs regions without text —
+            # good for hybrid PDFs (native + scanned pages).
+            pdf_opts.ocr_options = RapidOcrOptions(
+                lang=["chinese_sim", "english"],
+                force_full_page_ocr=False,
+            )
 
         converter = DocumentConverter(
             format_options={
