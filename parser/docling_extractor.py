@@ -13,13 +13,20 @@ from typing import Optional
 
 # Extensions that benefit from docling. .md/.txt/source code are NOT here —
 # they go through the existing raw-read + chunk_text path which is faster.
+# Legacy binary office formats (.doc/.ppt/.xls) are NOT in docling: attempting
+# them throws, and the old fallback decoded bytes as UTF-8 — producing mojibake
+# chunks. They are handled explicitly upstream (skipped) now.
 DOCLING_EXTS = {
     ".pdf",
-    ".docx", ".doc",
-    ".pptx", ".ppt",
-    ".xlsx", ".xls",
+    ".docx",
+    ".pptx",
+    ".xlsx",
     ".html", ".htm",
 }
+
+# Legacy binary office formats with no native text-extractor here. Callers
+# should skip them rather than fall through a UTF-8 decode that yields garbage.
+LEGACY_BINARY_OFFICE_EXTS = {".doc", ".ppt", ".xls", ".wps"}
 
 
 class DoclingExtractor:

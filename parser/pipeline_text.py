@@ -72,7 +72,9 @@ class TextPipeline:
 
     def _run_full(self, *, root_id: str, path: str, file_id: str,
                   sha256_full: str, now_ms: int) -> None:
-        from parser.docling_extractor import DoclingExtractor, is_docling_format
+        from parser.docling_extractor import (
+            DoclingExtractor, is_docling_format, LEGACY_BINARY_OFFICE_EXTS,
+        )
         from parser import repo_allowlist
         size = os.path.getsize(path)
         ext = Path(path).suffix.lower()
@@ -85,7 +87,19 @@ class TextPipeline:
             log.warning("skipped: not indexable per allowlist (path=%s)", path)
             return
 
-        if is_docling_format(ext):
+        if ext in LEGACY_BINARY_OFFICE_EXTS:
+            # .doc/.ppt/.xls/.wps — docling can't handle these and the old
+            # fallback (UTF-8 decode of binary bytes) produced gibberish
+            # chunks. Skip outright until we add a real extractor
+            # (antiword / libreoffice). The file record still gets upserted
+            # below via the empty-chunks branch so the parser knows it was
+            # seen.
+            log.warning("skipping legacy binary office format %s (path=%s)",
+                        ext, path)
+            chunks = []
+            text = ""
+            mime = f"application/legacy-office/{ext.lstrip('.')}"
+        elif is_docling_format(ext):
             # PDF/DOCX/PPTX/XLSX/HTML → docling → markdown → chunk_markdown.
             # OCR toggled via parser_state.ocr_enabled — same singleton
             # extractor reloads on change.
@@ -95,11 +109,15 @@ class TextPipeline:
                 text = DoclingExtractor.load(ocr=ocr).to_markdown(path)
                 chunks = chunk_markdown(text, min_tokens=20)
                 mime = f"text/markdown+docling/{ext.lstrip('.')}"
-            except Exception:
-                with open(path, "rb") as f:
-                    text = f.read().decode("utf-8", errors="replace")
-                chunks = chunk_plain(text, min_tokens=20)
-                mime = "text/plain"
+            except Exception as exc:
+                # Docling failed (corrupted file, unsupported variant, …).
+                # Do NOT decode raw bytes as UTF-8 — that produces mojibake.
+                # Record the file but skip indexing its content.
+                log.warning("docling failed for %s: %s — skipping content",
+                            path, exc)
+                chunks = []
+                text = ""
+                mime = f"application/octet-stream/{ext.lstrip('.')}"
         elif ext in _MD_EXT:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
