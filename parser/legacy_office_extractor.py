@@ -42,5 +42,51 @@ def is_legacy_binary_office(ext: str) -> bool:
 
 
 def convert_legacy(src: str) -> Path:
-    """Stub — implemented in Task 2."""
-    raise NotImplementedError
+    """Convert `src` to a modern Open XML file via `libreoffice --headless`.
+
+    Returns the path to a freshly produced file inside a private outdir; the
+    CALLER must `shutil.rmtree(result.parent, ignore_errors=True)` once it
+    has consumed the file (we cannot do it ourselves — the caller is still
+    reading the file when convert_legacy returns).
+
+    Raises on any failure (non-zero exit, timeout, soffice ran but produced
+    no output). Caller is expected to log and fall back to "skip" semantics
+    rather than retry.
+    """
+    ext = Path(src).suffix.lower()
+    if ext not in _TARGET:
+        raise ValueError(f"unsupported legacy office ext: {ext!r}")
+    target = _TARGET[ext]
+    outdir = Path(tempfile.mkdtemp(prefix="lo-out-"))
+    profile = Path(tempfile.mkdtemp(prefix="lo-prof-"))
+    try:
+        with _LO_GATE:
+            cp = subprocess.run(
+                [
+                    "soffice",
+                    f"-env:UserInstallation=file://{profile}",
+                    "--headless",
+                    "--convert-to", target,
+                    "--outdir", str(outdir),
+                    src,
+                ],
+                check=True,
+                timeout=LO_TIMEOUT_SEC,
+                capture_output=True,
+            )
+        produced = next(outdir.glob(f"*.{target}"), None)
+        if produced is None:
+            stdout = cp.stdout.decode("utf-8", errors="replace")
+            stderr = cp.stderr.decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"libreoffice produced no .{target} for {src} "
+                f"(stdout={stdout!r}, stderr={stderr!r})"
+            )
+        return produced
+    except Exception:
+        # On failure clean up the outdir we created. Profile is always cleaned
+        # in the finally below. We deliberately do NOT swallow — caller logs.
+        shutil.rmtree(outdir, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
