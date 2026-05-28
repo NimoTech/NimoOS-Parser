@@ -168,3 +168,44 @@ def test_convert_legacy_rejects_unknown_ext(tmp_path):
     src.write_bytes(b"x")
     with pytest.raises(ValueError, match="unsupported legacy office ext"):
         convert_legacy(str(src))
+
+
+import shutil as _shutil_for_skip
+_HAS_SOFFICE = _shutil_for_skip.which("soffice") is not None
+
+
+@pytest.mark.skipif(not _HAS_SOFFICE,
+                    reason="libreoffice (soffice) not installed")
+def test_convert_legacy_real_soffice_doc_to_docx(tmp_path):
+    """End-to-end with the real LibreOffice binary.
+
+    We build a small Word 97-2003 .doc by asking soffice itself to convert a
+    minimal .txt → .doc first. Two reasons: (1) avoids committing a
+    pre-built binary fixture just for this single test, and (2) makes the
+    fixture deterministic across machines.
+    """
+    src_txt = tmp_path / "hello.txt"
+    src_txt.write_text("Hello from a legacy office conversion test.\n",
+                       encoding="utf-8")
+
+    # Build the .doc with soffice (separate call — uses convert_legacy
+    # itself would be circular).
+    out_seed = tmp_path / "seed"
+    out_seed.mkdir()
+    subprocess.run(
+        ["soffice", "--headless", "--convert-to", "doc",
+         "--outdir", str(out_seed), str(src_txt)],
+        check=True, timeout=120, capture_output=True,
+    )
+    src_doc = out_seed / "hello.doc"
+    assert src_doc.exists(), "soffice failed to seed .doc fixture"
+
+    produced = convert_legacy(str(src_doc))
+    try:
+        assert produced.suffix == ".docx"
+        assert produced.stat().st_size > 0
+        # Sanity: docx is a zip (PK\x03\x04 magic).
+        assert produced.read_bytes()[:2] == b"PK"
+    finally:
+        shutil_module = __import__("shutil")
+        shutil_module.rmtree(produced.parent, ignore_errors=True)
