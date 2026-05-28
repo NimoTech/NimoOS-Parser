@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_CONF = Path("/etc/nimoos/parser.conf")
-PARSER_VERSION = "parser/0.1.0"
+PARSER_VERSION = "parser/0.2.0"
 
 
 @dataclass
