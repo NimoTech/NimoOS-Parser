@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import sqlite3
 import time
 import uuid
@@ -88,17 +89,34 @@ class TextPipeline:
             return
 
         if ext in LEGACY_BINARY_OFFICE_EXTS:
-            # .doc/.ppt/.xls/.wps — docling can't handle these and the old
-            # fallback (UTF-8 decode of binary bytes) produced gibberish
-            # chunks. Skip outright until we add a real extractor
-            # (antiword / libreoffice). The file record still gets upserted
-            # below via the empty-chunks branch so the parser knows it was
-            # seen.
-            log.warning("skipping legacy binary office format %s (path=%s)",
-                        ext, path)
-            chunks = []
-            text = ""
-            mime = f"application/legacy-office/{ext.lstrip('.')}"
+            # .doc/.ppt/.xls/.wps — docling can't read OLE binary office.
+            # Convert to modern Open XML via libreoffice headless first, then
+            # feed the result into the same docling path the other formats
+            # use. On any conversion failure (corrupted file, soffice missing,
+            # timeout) we fall back to "skip with empty chunks" — never
+            # UTF-8-decode the raw OLE bytes, that produces mojibake which
+            # the old code put into Qdrant.
+            from parser.legacy_office_extractor import convert_legacy
+            from parser.repo_state import get_state
+            ocr = get_state(self.conn).get("ocr_enabled", False)
+            try:
+                converted = convert_legacy(path)
+                try:
+                    text = DoclingExtractor.load(ocr=ocr).to_markdown(
+                        str(converted))
+                    chunks = chunk_markdown(text, min_tokens=20)
+                    mime = (f"text/markdown+libreoffice-docling/"
+                            f"{ext.lstrip('.')}")
+                finally:
+                    shutil.rmtree(converted.parent, ignore_errors=True)
+            except Exception as exc:
+                log.warning(
+                    "legacy office conversion failed for %s: %s — skipping",
+                    path, exc,
+                )
+                chunks = []
+                text = ""
+                mime = f"application/legacy-office/{ext.lstrip('.')}"
         elif is_docling_format(ext):
             # PDF/DOCX/PPTX/XLSX/HTML → docling → markdown → chunk_markdown.
             # OCR toggled via parser_state.ocr_enabled — same singleton

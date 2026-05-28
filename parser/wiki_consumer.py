@@ -16,7 +16,7 @@ TEXT_EXT_ALLOWLIST = {
     ".md", ".txt", ".rst",
     # docling-handled (PDF / Office / web)
     ".pdf",
-    ".docx", ".doc",
+    ".docx", ".doc", ".wps",
     ".pptx", ".ppt",
     ".xlsx", ".xls",
     ".odt",
