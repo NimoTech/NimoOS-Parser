@@ -179,3 +179,90 @@ def test_worker_without_wiki_client_does_not_crash(conn):
         "SELECT COUNT(*) FROM parse_jobs WHERE done_at IS NOT NULL"
     ).fetchone()[0]
     assert done == 1
+
+
+def test_worker_writes_last_error_to_file_records_on_failure(tmp_path):
+    """Pipeline 抛错 → worker fail_job → file_records.last_error 同步写入。"""
+    from parser.db import init_db
+    from parser.repo_records import upsert_file_record, upsert_file_path
+
+    conn = init_db(tmp_path / "p.db")
+    upsert_file_record(
+        conn, file_id="fid1", sha256_full="abc", size=10, mime="text/plain",
+        modalities_done={}, parser_version="parser/0.2.0", indexed_at=100,
+    )
+    upsert_file_path(
+        conn, root_id="r1", path="/p1", file_id="fid1", mtime_ms=0,
+    )
+
+    class FailingPipeline:
+        def index_file(self, *, root_id, path, now_ms):
+            raise RuntimeError("docling exploded")
+
+    enqueue_job(conn, root_id="r1", path="/p1", op="index",
+                priority=100, now_ms=100)
+
+    pool = WorkerPool(conn, text_pipeline=FailingPipeline(),
+                      concurrency=1, lease_s=10, max_attempts=1)
+
+    async def runner():
+        await pool.start()
+        for _ in range(200):
+            if conn.execute(
+                "SELECT COUNT(*) FROM parse_jobs WHERE done_at IS NULL"
+            ).fetchone()[0] == 0:
+                break
+            await asyncio.sleep(0.02)
+        await pool.stop()
+
+    asyncio.run(runner())
+
+    row = conn.execute(
+        "SELECT last_error FROM file_records WHERE file_id='fid1'"
+    ).fetchone()
+    assert row["last_error"] == "docling exploded"
+
+
+def test_worker_clears_last_error_on_success(tmp_path):
+    """成功路径覆写为 NULL。"""
+    from parser.db import init_db
+    from parser.repo_records import (
+        upsert_file_record, upsert_file_path, set_last_error,
+    )
+
+    conn = init_db(tmp_path / "p.db")
+    upsert_file_record(
+        conn, file_id="fid1", sha256_full="abc", size=10, mime="text/plain",
+        modalities_done={}, parser_version="parser/0.2.0", indexed_at=100,
+    )
+    upsert_file_path(
+        conn, root_id="r1", path="/p1", file_id="fid1", mtime_ms=0,
+    )
+    set_last_error(conn, root_id="r1", path="/p1", error="prev")  # 先污染
+
+    class OkPipeline:
+        def index_file(self, *, root_id, path, now_ms):
+            return None
+
+    enqueue_job(conn, root_id="r1", path="/p1", op="index",
+                priority=100, now_ms=100)
+
+    pool = WorkerPool(conn, text_pipeline=OkPipeline(),
+                      concurrency=1, lease_s=10)
+
+    async def runner():
+        await pool.start()
+        for _ in range(200):
+            if conn.execute(
+                "SELECT COUNT(*) FROM parse_jobs WHERE done_at IS NULL"
+            ).fetchone()[0] == 0:
+                break
+            await asyncio.sleep(0.02)
+        await pool.stop()
+
+    asyncio.run(runner())
+
+    row = conn.execute(
+        "SELECT last_error FROM file_records WHERE file_id='fid1'"
+    ).fetchone()
+    assert row["last_error"] is None

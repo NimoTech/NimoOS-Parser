@@ -6,6 +6,7 @@ import time
 from typing import Optional
 
 from parser.repo_jobs import dequeue_job, complete_job, fail_job
+from parser.repo_records import set_last_error
 
 log = logging.getLogger("parser.workers")
 
@@ -128,6 +129,13 @@ class WorkerPool:
                     complete_job, self.conn, job["id"],
                     int(time.time() * 1000),
                 )
+                # Clear any stale last_error on this file (write-through to
+                # file_records so the file list API can answer status without
+                # joining parse_jobs).
+                await asyncio.to_thread(
+                    set_last_error, self.conn,
+                    root_id=job["root_id"], path=job["path"], error=None,
+                )
                 await self._notify_wiki(job, status="indexed" if job["op"] != "delete" else "deleted")
             except Exception as e:
                 log.exception("worker %s failed job id=%s", worker_id, job["id"])
@@ -135,6 +143,13 @@ class WorkerPool:
                     fail_job, self.conn, job_id=job["id"],
                     error=str(e), now_ms=int(time.time() * 1000),
                     max_attempts=self.max_attempts,
+                )
+                # Mirror the error into file_records.last_error. No-op if the
+                # file_path row doesn't exist yet (failure before file_record
+                # creation).
+                await asyncio.to_thread(
+                    set_last_error, self.conn,
+                    root_id=job["root_id"], path=job["path"], error=str(e),
                 )
                 await self._notify_wiki(job, status="failed", error=str(e))
 
