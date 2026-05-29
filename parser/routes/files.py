@@ -64,3 +64,30 @@ async def get_files(
         })
     missing = [fid for fid in ids if fid not in found_ids]
     return {"files": files, "missing": missing}
+
+
+@router.get("/files")
+async def list_files(
+    root_id: Optional[str] = Query(None),
+    path_prefix: Optional[str] = Query(None),
+    mime_prefix: Optional[str] = Query(None),
+    has_error: bool = Query(False),
+    tombstoned: str = Query("alive", pattern="^(alive|tombstoned|all)$"),
+    sort: str = Query("indexed_at",
+                      pattern="^(indexed_at|size|vector_count|path)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Paginated file list with filters and computed `status` field."""
+    from parser.service_files import list_files as svc_list_files
+    try:
+        return svc_list_files(
+            get_conn(),
+            root_id=root_id, path_prefix=path_prefix,
+            mime_prefix=mime_prefix, has_error=has_error,
+            tombstoned=tombstoned, sort=sort, order=order,
+            limit=limit, offset=offset,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
