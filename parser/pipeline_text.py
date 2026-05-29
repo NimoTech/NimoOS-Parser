@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import sqlite3
 import time
 import uuid
@@ -72,7 +73,9 @@ class TextPipeline:
 
     def _run_full(self, *, root_id: str, path: str, file_id: str,
                   sha256_full: str, now_ms: int) -> None:
-        from parser.docling_extractor import DoclingExtractor, is_docling_format
+        from parser.docling_extractor import (
+            DoclingExtractor, is_docling_format, LEGACY_BINARY_OFFICE_EXTS,
+        )
         from parser import repo_allowlist
         size = os.path.getsize(path)
         ext = Path(path).suffix.lower()
@@ -85,7 +88,36 @@ class TextPipeline:
             log.warning("skipped: not indexable per allowlist (path=%s)", path)
             return
 
-        if is_docling_format(ext):
+        if ext in LEGACY_BINARY_OFFICE_EXTS:
+            # .doc/.ppt/.xls/.wps — docling can't read OLE binary office.
+            # Convert to modern Open XML via libreoffice headless first, then
+            # feed the result into the same docling path the other formats
+            # use. On any conversion failure (corrupted file, soffice missing,
+            # timeout) we fall back to "skip with empty chunks" — never
+            # UTF-8-decode the raw OLE bytes, that produces mojibake which
+            # the old code put into Qdrant.
+            from parser.legacy_office_extractor import convert_legacy
+            from parser.repo_state import get_state
+            ocr = get_state(self.conn).get("ocr_enabled", False)
+            try:
+                converted = convert_legacy(path)
+                try:
+                    text = DoclingExtractor.load(ocr=ocr).to_markdown(
+                        str(converted))
+                    chunks = chunk_markdown(text, min_tokens=20)
+                    mime = (f"text/markdown+libreoffice-docling/"
+                            f"{ext.lstrip('.')}")
+                finally:
+                    shutil.rmtree(converted.parent, ignore_errors=True)
+            except Exception as exc:
+                log.warning(
+                    "legacy office conversion failed for %s: %s — skipping",
+                    path, exc,
+                )
+                chunks = []
+                text = ""
+                mime = f"application/legacy-office/{ext.lstrip('.')}"
+        elif is_docling_format(ext):
             # PDF/DOCX/PPTX/XLSX/HTML → docling → markdown → chunk_markdown.
             # OCR toggled via parser_state.ocr_enabled — same singleton
             # extractor reloads on change.
@@ -95,11 +127,15 @@ class TextPipeline:
                 text = DoclingExtractor.load(ocr=ocr).to_markdown(path)
                 chunks = chunk_markdown(text, min_tokens=20)
                 mime = f"text/markdown+docling/{ext.lstrip('.')}"
-            except Exception:
-                with open(path, "rb") as f:
-                    text = f.read().decode("utf-8", errors="replace")
-                chunks = chunk_plain(text, min_tokens=20)
-                mime = "text/plain"
+            except Exception as exc:
+                # Docling failed (corrupted file, unsupported variant, …).
+                # Do NOT decode raw bytes as UTF-8 — that produces mojibake.
+                # Record the file but skip indexing its content.
+                log.warning("docling failed for %s: %s — skipping content",
+                            path, exc)
+                chunks = []
+                text = ""
+                mime = f"application/octet-stream/{ext.lstrip('.')}"
         elif ext in _MD_EXT:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()

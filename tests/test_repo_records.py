@@ -69,3 +69,57 @@ def test_tombstone_set_clear(conn):
     clear_tombstone(conn, file_id="abc")
     rec = get_file_record(conn, "abc")
     assert rec["tombstoned_at"] is None
+
+
+def test_set_last_error_writes_to_file_record_via_path_lookup(tmp_path):
+    """通过 (root_id, path) 找到 file_id,更新 file_records.last_error。"""
+    from parser.db import init_db
+    from parser.repo_records import (
+        upsert_file_record, upsert_file_path, set_last_error,
+    )
+    conn = init_db(tmp_path / "p.db")
+    upsert_file_record(
+        conn, file_id="fid1", sha256_full="abc", size=10, mime="text/plain",
+        modalities_done={}, parser_version="parser/0.2.0", indexed_at=100,
+    )
+    upsert_file_path(
+        conn, root_id="r1", path="/p1", file_id="fid1", mtime_ms=0,
+    )
+
+    set_last_error(conn, root_id="r1", path="/p1", error="boom")
+
+    row = conn.execute(
+        "SELECT last_error FROM file_records WHERE file_id='fid1'"
+    ).fetchone()
+    assert row["last_error"] == "boom"
+
+
+def test_set_last_error_with_none_clears(tmp_path):
+    from parser.db import init_db
+    from parser.repo_records import (
+        upsert_file_record, upsert_file_path, set_last_error,
+    )
+    conn = init_db(tmp_path / "p.db")
+    upsert_file_record(
+        conn, file_id="fid1", sha256_full="abc", size=10, mime="text/plain",
+        modalities_done={}, parser_version="parser/0.2.0", indexed_at=100,
+    )
+    upsert_file_path(
+        conn, root_id="r1", path="/p1", file_id="fid1", mtime_ms=0,
+    )
+    set_last_error(conn, root_id="r1", path="/p1", error="boom")
+    set_last_error(conn, root_id="r1", path="/p1", error=None)
+
+    row = conn.execute(
+        "SELECT last_error FROM file_records WHERE file_id='fid1'"
+    ).fetchone()
+    assert row["last_error"] is None
+
+
+def test_set_last_error_silently_skips_when_path_unknown(tmp_path):
+    """job 在 file_paths 创建前就失败的情况 —— no-op,不抛。"""
+    from parser.db import init_db
+    from parser.repo_records import set_last_error
+    conn = init_db(tmp_path / "p.db")
+    set_last_error(conn, root_id="ghost", path="/none", error="boom")
+    # 不抛即通过

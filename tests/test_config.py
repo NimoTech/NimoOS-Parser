@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from parser.config import Settings, load_settings
+from parser.config import PARSER_VERSION, Settings, load_settings
 
 
 def test_load_settings_uses_defaults_when_no_file(tmp_path):
@@ -9,7 +9,7 @@ def test_load_settings_uses_defaults_when_no_file(tmp_path):
     assert settings.data_path == Path("/var/lib/nimoos/parser")
     assert settings.wiki_poll_interval_s == 2
     assert settings.tombstone_grace_hours == 24
-    assert settings.parser_version == "parser/0.1.0"
+    assert settings.parser_version == PARSER_VERSION
 
 
 def test_load_settings_overrides_from_ini(tmp_path):

@@ -104,3 +104,26 @@ def list_tombstoned_older_than(conn: sqlite3.Connection, before_ms: int) -> list
 def delete_file_record(conn: sqlite3.Connection, file_id: str) -> None:
     conn.execute("DELETE FROM file_paths WHERE file_id = ?", (file_id,))
     conn.execute("DELETE FROM file_records WHERE file_id = ?", (file_id,))
+
+
+def set_last_error(
+    conn: sqlite3.Connection, *, root_id: str, path: str,
+    error: Optional[str],
+) -> None:
+    """Update file_records.last_error for the file at (root_id, path).
+
+    No-op if (root_id, path) has no file_paths row — this happens when a job
+    fails before its file_record is created (e.g. sha256 stage). Those
+    job-level failures stay visible only through parse_jobs.last_error and
+    /v1/parser/jobs; they don't surface in the file list.
+    """
+    row = conn.execute(
+        "SELECT file_id FROM file_paths WHERE root_id = ? AND path = ?",
+        (root_id, path),
+    ).fetchone()
+    if row is None:
+        return
+    conn.execute(
+        "UPDATE file_records SET last_error = ? WHERE file_id = ?",
+        (error, row["file_id"]),
+    )

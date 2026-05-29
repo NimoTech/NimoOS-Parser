@@ -13,13 +13,22 @@ from typing import Optional
 
 # Extensions that benefit from docling. .md/.txt/source code are NOT here —
 # they go through the existing raw-read + chunk_text path which is faster.
+# Legacy binary OLE office formats (.doc/.ppt/.xls/.wps) are NOT in this set
+# either: docling can't read them. They are handled by pipeline_text via
+# `parser.legacy_office_extractor.convert_legacy`, which shells out to
+# `libreoffice --headless --convert-to <docx|pptx|xlsx>` and then re-enters
+# this docling path with the converted file.
 DOCLING_EXTS = {
     ".pdf",
-    ".docx", ".doc",
-    ".pptx", ".ppt",
-    ".xlsx", ".xls",
+    ".docx",
+    ".pptx",
+    ".xlsx",
     ".html", ".htm",
 }
+
+# Canonical set of legacy OLE office extensions. Owned here; consumed by
+# pipeline_text._run_full to route through legacy_office_extractor.
+LEGACY_BINARY_OFFICE_EXTS = {".doc", ".ppt", ".xls", ".wps"}
 
 
 class DoclingExtractor:
