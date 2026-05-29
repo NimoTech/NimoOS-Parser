@@ -135,4 +135,30 @@ def init_db(path: Path) -> sqlite3.Connection:
         "VALUES (?, 1, 'default', ?)",
         [(ext, now_ms) for ext in sorted(TEXT_EXT_ALLOWLIST)],
     )
+
+    # ---- migrations (idempotent) ----
+    # Add file_records.last_error column. SQLite has no `ADD COLUMN IF NOT EXISTS`,
+    # so we catch the duplicate-column OperationalError. This is the standard
+    # SQLite migration idiom.
+    try:
+        conn.execute("ALTER TABLE file_records ADD COLUMN last_error TEXT")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e).lower():
+            raise
+
+    # Indexes for the file list + reindex API (2026-05-28).
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_file_records_indexed_at "
+        "ON file_records(indexed_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_file_records_mime "
+        "ON file_records(mime)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_file_records_last_error "
+        "ON file_records(last_error) WHERE last_error IS NOT NULL"
+    )
+    conn.commit()
+
     return conn

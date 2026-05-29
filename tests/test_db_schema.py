@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 
 from parser.db import init_db, SCHEMA_SQL
 
@@ -40,3 +41,49 @@ def test_row_factory_enables_dict_access(tmp_path):
     row = conn.execute("SELECT id, since_ms FROM wiki_cursor").fetchone()
     assert row["id"] == 1
     assert row["since_ms"] == 0
+
+
+def test_init_db_adds_last_error_column():
+    """file_records 应有 last_error TEXT 列,可读写,默认 NULL。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        from parser.db import init_db
+        conn = init_db(Path(td) / "p.db")
+        cols = {r["name"] for r in conn.execute(
+            "PRAGMA table_info(file_records)"
+        ).fetchall()}
+        assert "last_error" in cols
+        # default NULL writable
+        conn.execute(
+            "INSERT INTO file_records "
+            "(file_id, sha256_full, size, mime, modalities_done, "
+            " parser_version, indexed_at) "
+            "VALUES ('f1','sha',0,'text/plain','{}','parser/0.2.0',0)"
+        )
+        row = conn.execute(
+            "SELECT last_error FROM file_records WHERE file_id='f1'"
+        ).fetchone()
+        assert row["last_error"] is None
+
+
+def test_init_db_adds_three_indexes():
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        from parser.db import init_db
+        conn = init_db(Path(td) / "p.db")
+        idx = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()}
+        assert "idx_file_records_indexed_at" in idx
+        assert "idx_file_records_mime" in idx
+        assert "idx_file_records_last_error" in idx
+
+
+def test_init_db_migration_is_idempotent():
+    """第二次 init_db 同库不应抛 (列已存在 / 索引已存在)。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        from parser.db import init_db
+        p = Path(td) / "p.db"
+        init_db(p)
+        init_db(p)  # 第二次,关键 —— ALTER 列重复加不能抛
