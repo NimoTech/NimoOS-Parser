@@ -200,3 +200,52 @@ def list_files(
         "offset": offset,
         "files": files,
     }
+
+
+MAX_REINDEX_BY_FILTER = 10000
+
+
+def count_file_ids_by_filter(
+    conn: sqlite3.Connection, *,
+    root_id: Optional[str] = None,
+    path_prefix: Optional[str] = None,
+    mime_prefix: Optional[str] = None,
+    has_error: bool = False,
+    tombstoned: str = "alive",
+) -> int:
+    """Cheap COUNT(*) for the same filter shape — used to gate
+    'matches > MAX_REINDEX_BY_FILTER → 400' without materializing rows."""
+    where, params = _build_where(
+        root_id=root_id, path_prefix=path_prefix, mime_prefix=mime_prefix,
+        has_error=has_error, tombstoned=tombstoned,
+    )
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM file_records r {where}", params,
+    ).fetchone()
+    return row["n"]
+
+
+def select_file_ids_by_filter(
+    conn: sqlite3.Connection, *,
+    root_id: Optional[str] = None,
+    path_prefix: Optional[str] = None,
+    mime_prefix: Optional[str] = None,
+    has_error: bool = False,
+    tombstoned: str = "alive",
+    limit: int = MAX_REINDEX_BY_FILTER,
+) -> list[str]:
+    """Return file_ids matching the filter, up to `limit`.
+
+    The caller (reindex_files filter mode) is responsible for first calling
+    count_file_ids_by_filter and 400-ing if > MAX_REINDEX_BY_FILTER.
+    """
+    where, params = _build_where(
+        root_id=root_id, path_prefix=path_prefix, mime_prefix=mime_prefix,
+        has_error=has_error, tombstoned=tombstoned,
+    )
+    rows = conn.execute(
+        f"SELECT r.file_id FROM file_records r {where} "
+        f"ORDER BY r.file_id LIMIT ?",
+        params + [limit],
+    ).fetchall()
+    return [r["file_id"] for r in rows]

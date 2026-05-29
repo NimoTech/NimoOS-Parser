@@ -159,3 +159,40 @@ def test_list_files_includes_paths_and_modalities(conn):
     ]
     assert f["modalities_done"] == {"text": "bge-m3/v1"}
     assert f["sha256_full"] == "sha-a"
+
+
+def test_select_file_ids_by_filter_matches_root(conn):
+    from parser.service_files import select_file_ids_by_filter
+    _seed(conn, file_id="a", root_id="r1")
+    _seed(conn, file_id="b", root_id="r1")
+    _seed(conn, file_id="c", root_id="r2")
+    ids = select_file_ids_by_filter(conn, root_id="r1", limit=10000)
+    assert set(ids) == {"a", "b"}
+
+
+def test_select_file_ids_by_filter_mime_prefix(conn):
+    from parser.service_files import select_file_ids_by_filter
+    _seed(conn, file_id="leg1", mime="application/legacy-office/doc")
+    _seed(conn, file_id="leg2", mime="application/legacy-office/ppt")
+    _seed(conn, file_id="md",   mime="text/markdown")
+    ids = select_file_ids_by_filter(
+        conn, mime_prefix="application/legacy-office/", limit=10000,
+    )
+    assert set(ids) == {"leg1", "leg2"}
+
+
+def test_select_file_ids_by_filter_excludes_tombstoned_by_default(conn):
+    from parser.service_files import select_file_ids_by_filter
+    _seed(conn, file_id="alive")
+    _seed(conn, file_id="dead", tombstoned=True)
+    ids = select_file_ids_by_filter(conn, limit=10000)
+    assert set(ids) == {"alive"}
+
+
+def test_select_file_ids_by_filter_caps_at_limit(conn):
+    from parser.service_files import select_file_ids_by_filter
+    for i in range(50):
+        _seed(conn, file_id=f"f{i:02d}")
+    # limit=10 → only 10 returned, but the COUNT path is for the caller
+    ids = select_file_ids_by_filter(conn, limit=10)
+    assert len(ids) == 10
