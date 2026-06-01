@@ -267,7 +267,7 @@ async def _lifespan(app: FastAPI):
 
 
 def create_app(*, skip_workers: bool = False) -> FastAPI:
-    app = FastAPI(title="NimoOS-Parser", version="0.1.0",
+    app = FastAPI(title="NimoOS-Parser", version="1.9.0-alpha1",
                   lifespan=_lifespan)
     app.include_router(allowlist.router)
     app.include_router(control.router)
