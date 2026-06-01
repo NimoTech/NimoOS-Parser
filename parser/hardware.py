@@ -22,6 +22,20 @@ def _total_ram_bytes() -> int:
     return 0
 
 
+def _torch_cuda_available() -> bool:
+    """Authoritative check for whether torch can actually use a CUDA device.
+
+    nvidia-smi merely tells us the driver/utils are installed — it returns
+    success on hosts that have nvidia-utils but no usable GPU (e.g. an AMD
+    box). torch.cuda.is_available() is what actually gates model placement.
+    """
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def _has_nvidia_gpu() -> bool:
     if not shutil.which("nvidia-smi"):
         return False
@@ -30,9 +44,13 @@ def _has_nvidia_gpu() -> bool:
             ["nvidia-smi", "-L"],
             capture_output=True, timeout=2, check=True,
         )
-        return True
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
+    # nvidia-smi present is necessary but NOT sufficient — confirm torch can
+    # really use the GPU, otherwise 'auto' falsely resolves to cuda on
+    # CPU-only machines that happen to have nvidia-utils installed and crashes
+    # at model load.
+    return _torch_cuda_available()
 
 
 def detect_profile() -> Profile:
