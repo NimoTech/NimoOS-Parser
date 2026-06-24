@@ -1,0 +1,79 @@
+"""On-demand docling extraction of a disk path → markdown.
+
+Unlike the indexing pipeline this writes nothing to Qdrant/DB — it is a pure
+read used by the agent's read_document(path=...) for files not yet indexed.
+Security: the authoritative per-user check is the caller (AI layer's
+visible_resources gate). This endpoint additionally bounds reads to the NAS
+data roots so it can never read outside them regardless of caller.
+"""
+import os
+import shutil
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+router = APIRouter(prefix="/v1/parser/extract", tags=["extract"])
+
+# Defense-in-depth: only files under these roots may be read. Module-level so
+# tests can monkeypatch it. The NAS exposes user content under /DATA; external
+# media mounts under /media and /mnt.
+EXTRACT_ROOTS = ("/DATA", "/media", "/mnt")
+
+EXTRACT_MAX_CHARS_DEFAULT = 40000
+
+
+class ExtractRequest(BaseModel):
+    path: str
+    ocr: bool = False
+    max_chars: int = Field(default=EXTRACT_MAX_CHARS_DEFAULT, ge=1)
+
+
+def _safe_resolve(path: str) -> str:
+    try:
+        real = os.path.realpath(path)
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not any(real == r or real.startswith(r.rstrip(os.sep) + os.sep)
+               for r in EXTRACT_ROOTS):
+        raise HTTPException(status_code=403, detail="path outside allowed roots")
+    if not os.path.isfile(real):
+        raise HTTPException(status_code=404, detail="file not found")
+    return real
+
+
+@router.post("")
+def extract(body: ExtractRequest) -> dict:
+    # sync def → FastAPI runs it in a threadpool, so docling does not block the
+    # event loop (and other Parser requests keep flowing).
+    from parser.docling_extractor import (
+        DoclingExtractor, is_docling_format, LEGACY_BINARY_OFFICE_EXTS,
+    )
+
+    real = _safe_resolve(body.path)
+    ext = os.path.splitext(real)[1].lower()
+
+    if is_docling_format(ext):
+        markdown = DoclingExtractor.load(ocr=body.ocr).to_markdown(real)
+    elif ext in LEGACY_BINARY_OFFICE_EXTS:
+        converted = None
+        try:
+            from parser.legacy_office_extractor import convert_legacy
+            converted = convert_legacy(real)
+            markdown = DoclingExtractor.load(ocr=body.ocr).to_markdown(str(converted))
+        except Exception as exc:  # legacy conversion / docling failure
+            raise HTTPException(status_code=500,
+                                detail=f"extraction failed: {exc}")
+        finally:
+            if converted is not None:
+                shutil.rmtree(converted.parent, ignore_errors=True)
+    else:
+        # plain text / source / markdown — read directly.
+        with open(real, "r", encoding="utf-8", errors="replace") as f:
+            markdown = f.read()
+
+    truncated = False
+    if len(markdown) > body.max_chars:
+        markdown = markdown[:body.max_chars]
+        truncated = True
+    return {"path": real, "markdown": markdown, "truncated": truncated,
+            "ocr": body.ocr}
