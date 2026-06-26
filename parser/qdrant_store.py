@@ -9,12 +9,16 @@ VISUAL_COLLECTION = "visual_chunks"
 TEXT_DENSE_DIM = 1024
 VISUAL_DENSE_DIM = 1152
 
+AGENT_MEMORY_COLLECTION = "agent_memory"
+AGENT_MEMORY_DENSE_DIM = 1024
+
 
 class QdrantStore:
     def __init__(self, url: str, grpc_port: int = 6334) -> None:
         self.client = QdrantClient(url=url, prefer_grpc=True, grpc_port=grpc_port)
         self.text_collection = TEXT_COLLECTION
         self.visual_collection = VISUAL_COLLECTION
+        self.agent_memory_collection = AGENT_MEMORY_COLLECTION
 
     def ensure_collections(self) -> None:
         existing = {c.name for c in self.client.get_collections().collections}
@@ -43,6 +47,24 @@ class QdrantStore:
                 hnsw_config=qm.HnswConfigDiff(m=16, ef_construct=100),
                 on_disk_payload=True,
             )
+        if self.agent_memory_collection not in existing:
+            self.client.create_collection(
+                collection_name=self.agent_memory_collection,
+                vectors_config={
+                    "dense": qm.VectorParams(size=AGENT_MEMORY_DENSE_DIM,
+                                             distance=qm.Distance.COSINE),
+                },
+                hnsw_config=qm.HnswConfigDiff(m=16, ef_construct=100),
+                on_disk_payload=True,
+            )
+        for field in ("user_id", "session_id"):
+            try:
+                self.client.create_payload_index(
+                    self.agent_memory_collection, field_name=field,
+                    field_schema=qm.PayloadSchemaType.KEYWORD,
+                )
+            except Exception:
+                pass
         for field in ("file_id", "root_ids", "kind", "mime", "lang", "parser_version"):
             try:
                 self.client.create_payload_index(
@@ -86,6 +108,41 @@ class QdrantStore:
         ]
         if batch:
             self.client.upsert(self.visual_collection, points=batch, wait=True)
+
+    def upsert_agent_memory(self, points: Iterable[dict]) -> None:
+        batch = [
+            qm.PointStruct(id=p["id"], vector={"dense": p["dense"]},
+                           payload=p["payload"])
+            for p in points
+        ]
+        if batch:
+            self.client.upsert(self.agent_memory_collection, points=batch,
+                               wait=True)
+
+    def query_agent_memory(self, user_id: str, dense: list,
+                           limit: int = 5) -> list[dict]:
+        resp = self.client.query_points(
+            collection_name=self.agent_memory_collection,
+            query=dense,
+            using="dense",
+            query_filter=qm.Filter(must=[
+                qm.FieldCondition(key="user_id",
+                                  match=qm.MatchValue(value=str(user_id))),
+            ]),
+            limit=limit,
+            with_payload=True,
+        )
+        hits = []
+        for pt in resp.points:
+            pl = pt.payload or {}
+            hits.append({
+                "text": pl.get("text", ""),
+                "session_id": pl.get("session_id", ""),
+                "chunk_no": pl.get("chunk_no", 0),
+                "created_at": pl.get("created_at", 0),
+                "score": pt.score,
+            })
+        return hits
 
     def set_root_ids_for_file(self, file_id: str,
                               root_ids: list[str]) -> None:
