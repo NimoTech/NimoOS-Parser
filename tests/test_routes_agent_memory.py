@@ -70,3 +70,16 @@ def test_query_rejects_empty_user_id(client, monkeypatch):
     r = client.post("/v1/parser/agent-memory/query",
                     json={"user_id": "", "query": "x"})
     assert r.status_code == 400
+
+
+def test_query_rejects_out_of_range_top_k(client, monkeypatch):
+    _fake_qstore(monkeypatch)
+    for bad in (0, -1, 51):
+        r = client.post("/v1/parser/agent-memory/query",
+                        json={"user_id": "u1", "query": "x", "top_k": bad})
+        assert r.status_code == 422, bad
+    # boundary values are accepted
+    for ok in (1, 50):
+        r = client.post("/v1/parser/agent-memory/query",
+                        json={"user_id": "u1", "query": "x", "top_k": ok})
+        assert r.status_code == 200, ok

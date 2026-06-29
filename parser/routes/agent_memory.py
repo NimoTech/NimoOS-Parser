@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/v1/parser", tags=["agent-memory"])
 
@@ -24,7 +24,7 @@ class UpsertRequest(BaseModel):
 class QueryRequest(BaseModel):
     user_id: str
     query: str
-    top_k: int = 5
+    top_k: int = Field(5, ge=1, le=50)
 
 
 def _embed_dense_batch(texts: list[str]) -> list[list[float]]:
