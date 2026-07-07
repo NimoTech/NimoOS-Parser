@@ -37,10 +37,14 @@ NimoOS RAG 层的**文档索引服务**。当前版本 `1.9.0-alpha1`(见 `parse
                      │    Qdrant       │
                      │ text_chunks     │ ◄─── NimoOS-Search 查询
                      │ visual_chunks   │      (检索 + 重排 rerank)
+                     │ agent_memory    │ ◄─── NimoOS-AI agent 会话记忆召回
                      └─────────────────┘
 ```
 
 - **文件变更事件**:由 WikiConsumer 轮询 NimoOS-Wiki,通过游标(`wiki_cursor`)追踪进度,避免重复入队。
+- **索引管线之外的旁路**(均由 NimoOS-AI 经 `agent/parser_client.py` 调用):
+  - `/extract` + `/render/pages`(`parser/routes/extract.py` / `render.py`):file-reader 的按需解析与 PDF 页渲染,**纯读**,不写 Qdrant/SQLite;
+  - `/agent-memory/upsert|query`(`parser/routes/agent_memory.py`):agent 跨会话记忆的嵌入入库与语义召回,写独立的 `agent_memory` collection,与文件索引互不干扰。
 - **文件删除**:向量打 tombstone 标记,GC 任务(默认每 6h)超过宽限期(默认 24h)后从 Qdrant 真删。
 - **去重**:以 SHA-256 内容哈希作为 `file_id`,同内容多路径仅索引一次,仅更新 `root_ids`。
 
@@ -63,6 +67,11 @@ NimoOS RAG 层的**文档索引服务**。当前版本 `1.9.0-alpha1`(见 `parse
 | GET | `/folders/pending` | 按目录聚合 pending 任务数 |
 | POST | `/embed` | 调 BGE-M3 生成嵌入向量(供 Search 查询侧使用) |
 | POST | `/rerank` | 调 BGE-Reranker-v2-M3 重排(供 Search 精排) |
+| POST | `/extract` | 按磁盘路径按需 docling 解析 → Markdown(供 AI file-reader `read_document(path=…)`;纯读,路径限定 `/DATA` `/media` `/mnt`,默认截断 40000 字符) |
+| POST | `/render/pages` | PDF 页渲染为 PNG(base64,供 AI `view_document_page` 视觉读页;单次最多 8 页,scale 1.0–4.0) |
+| POST | `/agent-memory/upsert` | agent 会话记忆 chunk 嵌入并写入 `agent_memory` collection(uuid5 确定性点 id,幂等) |
+| POST | `/agent-memory/query` | 按 `user_id` 过滤的会话记忆语义召回(`top_k` 界限 [1,50],默认 5) |
+| POST | `/test/analyze` | 上传文件跑 chunk/嵌入/相似度预览(sandbox,不写 Qdrant/DB) |
 | GET | `/models` | 列出已注册的模型版本 |
 | GET | `/allowlist/extensions` | 查看扩展名白名单 |
 | PATCH | `/allowlist/extensions` | 启用/禁用某扩展名 |
@@ -129,8 +138,11 @@ NimoOS RAG 层的**文档索引服务**。当前版本 `1.9.0-alpha1`(见 `parse
 |---|---|---|---|
 | `text_chunks` | 文本 chunk 向量 | 1024 (BGE-M3) | bm25 (稀疏索引) |
 | `visual_chunks` | 图片/视觉 chunk 向量(预留,visual pipeline 待实现) | 1152 | — |
+| `agent_memory` | agent 跨会话记忆 chunk(NimoOS-AI 经 `/agent-memory/*` 写入/召回) | 1024 (BGE-M3) | — |
 
-Payload 关键字段:`file_id` / `root_ids` / `kind` / `mime` / `chunk_no` / `text` / `mtime_ms` / `tombstoned_at`。均建有 KEYWORD payload index 以支持过滤查询。
+文件索引 payload 关键字段:`file_id` / `root_ids` / `kind` / `mime` / `chunk_no` / `text` / `mtime_ms` / `tombstoned_at`。均建有 KEYWORD payload index 以支持过滤查询。
+
+`agent_memory` payload 字段:`user_id` / `session_id` / `chunk_no` / `text` / `created_at`,其中 `user_id`、`session_id` 建 KEYWORD index;召回始终按 `user_id` 过滤(见 `parser/qdrant_store.py` 的 `query_agent_memory`)。
 
 ---
 
@@ -286,10 +298,13 @@ pytest
 - **依赖 NimoOS-Wiki**:通过 `WikiConsumer` 轮询 Wiki 的文件事件接口,驱动增量索引。Wiki 地址通过 `/var/run/nimoos/wiki.url` 服务发现。
 - **依赖 Qdrant**:向量存储,默认 `http://127.0.0.1:6333`(HTTP)+ `6334`(gRPC,prefer_grpc=True)。
 - **被 NimoOS-Search 调用**:Search 通过 `/v1/parser/embed`(查询向量化)、`/v1/parser/rerank`(结果重排)和直接 Qdrant 查询完成语义检索。
+- **被 NimoOS-AI 调用**(`NimoOS-AI/agent/parser_client.py`):file-reader 走 `/v1/parser/extract`(按需解析未索引文件)与 `/v1/parser/render/pages`(视觉读页);agent 跨会话记忆走 `/v1/parser/agent-memory/upsert|query`。按用户可见性鉴权在 AI 层完成,Parser 侧仅做数据根路径兜底(`EXTRACT_ROOTS`)。
 - **被 Gateway 转发**:启动时向 Gateway 注册路由;无独立认证,依赖 Gateway 层。
 
 ---
 
 ## 参考设计文档
 
-`nimo_os_docs/docs/superpowers/specs/2026-05-21-rag-vector-db-design.md`
+- RAG 向量库(索引管线):`nimo_os_docs/docs/superpowers/specs/2026-05-21-rag-vector-db-design.md`
+- file-reader(`/extract` + `/render/pages`):`nimo_os_docs/docs/superpowers/specs/2026-06-23-file-reader-skill-design.md`,运行路径见 `nimo_os_docs/docs/design/file-reader-runtime-path.md`
+- agent 记忆召回(`/agent-memory/*`):`nimo_os_docs/docs/superpowers/specs/2026-06-26-agent-memory-p2-recall-design.md`
