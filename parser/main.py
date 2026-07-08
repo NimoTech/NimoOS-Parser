@@ -9,7 +9,8 @@ from typing import Optional
 
 from fastapi import FastAPI
 
-from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, rerank, render, rescan, stats, test as test_routes
+from parser.config import PARSER_APP_VERSION
+from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, rerank, render, rescan, stats, test as test_routes, version
 
 log = logging.getLogger("parser.main")
 
@@ -267,7 +268,7 @@ async def _lifespan(app: FastAPI):
 
 
 def create_app(*, skip_workers: bool = False) -> FastAPI:
-    app = FastAPI(title="NimoOS-Parser", version="1.9.0-alpha1",
+    app = FastAPI(title="NimoOS-Parser", version=PARSER_APP_VERSION,
                   lifespan=_lifespan)
     app.include_router(agent_memory.router)
     app.include_router(allowlist.router)
@@ -285,6 +286,7 @@ def create_app(*, skip_workers: bool = False) -> FastAPI:
     app.include_router(test_routes.router)
     app.include_router(extract.router)
     app.include_router(render.router)
+    app.include_router(version.router)
     app.state.skip_workers = skip_workers
     return app
 

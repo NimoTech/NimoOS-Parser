@@ -5,6 +5,7 @@ from pathlib import Path
 
 DEFAULT_CONF = Path("/etc/nimoos/parser.conf")
 PARSER_VERSION = "parser/0.2.0"
+PARSER_APP_VERSION = "1.9.2-alpha1"  # component/build version reported at /v1/parser/version
 
 
 @dataclass
