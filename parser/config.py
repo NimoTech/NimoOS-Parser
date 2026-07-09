@@ -5,7 +5,10 @@ from pathlib import Path
 
 DEFAULT_CONF = Path("/etc/nimoos/parser.conf")
 PARSER_VERSION = "parser/0.2.0"
-PARSER_APP_VERSION = "1.9.2-alpha1"  # component/build version reported at /v1/parser/version
+try:
+    from parser._version import VERSION as PARSER_APP_VERSION  # generated at deploy time; see deploy-parser.sh
+except ImportError:
+    PARSER_APP_VERSION = "dev"  # component/build version reported at /v1/parser/version
 
 
 @dataclass
