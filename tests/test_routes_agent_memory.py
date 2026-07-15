@@ -6,6 +6,7 @@ class FakeQStore:
     def __init__(self):
         self.upserted = None
         self.queried = None
+        self.deleted = None
         self.hits = [{"text": "t", "session_id": "s1", "chunk_no": 0,
                       "created_at": 1, "score": 0.9}]
 
@@ -15,6 +16,9 @@ class FakeQStore:
     def query_agent_memory(self, user_id, dense, limit=5):
         self.queried = {"user_id": user_id, "dense": dense, "limit": limit}
         return self.hits
+
+    def delete_agent_memory(self, user_id, session_id):
+        self.deleted = (user_id, session_id)
 
 
 def _fake_qstore(monkeypatch):
@@ -83,3 +87,17 @@ def test_query_rejects_out_of_range_top_k(client, monkeypatch):
         r = client.post("/v1/parser/agent-memory/query",
                         json={"user_id": "u1", "query": "x", "top_k": ok})
         assert r.status_code == 200, ok
+
+
+def test_delete_endpoint_calls_store(monkeypatch, client):
+    fake = _fake_qstore(monkeypatch)
+    r = client.post("/v1/parser/agent-memory/delete",
+                    json={"user_id": "u1", "session_id": "s1"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert fake.deleted == ("u1", "s1")
+
+
+def test_delete_endpoint_requires_ids(client):
+    r = client.post("/v1/parser/agent-memory/delete",
+                    json={"user_id": "", "session_id": "s1"})
+    assert r.status_code == 400

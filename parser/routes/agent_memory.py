@@ -69,3 +69,18 @@ async def agent_memory_query(req: QueryRequest) -> dict:
     hits = app_state.qstore.query_agent_memory(req.user_id, dense,
                                                limit=req.top_k)
     return {"hits": hits}
+
+
+class DeleteRequest(BaseModel):
+    user_id: str
+    session_id: str
+
+
+@router.post("/agent-memory/delete")
+async def agent_memory_delete(req: DeleteRequest) -> dict:
+    if not req.user_id or not req.session_id:
+        raise HTTPException(status_code=400,
+                            detail="user_id and session_id required")
+    from parser.main import app_state
+    app_state.qstore.delete_agent_memory(req.user_id, req.session_id)
+    return {"ok": True}
