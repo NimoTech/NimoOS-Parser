@@ -8,6 +8,7 @@ class FakeClient:
         self.created = []
         self.indexed = []
         self.upserts = []
+        self.deleted = []
         self.last_query = None
         self.query_result = SimpleNamespace(points=[])
 
@@ -24,6 +25,12 @@ class FakeClient:
 
     def upsert(self, collection, points, wait):
         self.upserts.append((collection, points))
+
+    def delete(self, collection_name, points_selector, wait=True):
+        conds = [{"key": c.key, "value": c.match.value}
+                 for c in points_selector.filter.must]
+        self.deleted.append({"collection_name": collection_name,
+                             "filter_conditions": conds})
 
     def query_points(self, collection_name, query, using, query_filter,
                      limit, with_payload):
@@ -80,3 +87,13 @@ def test_query_agent_memory_filters_user_id_and_maps():
     assert s.client.last_query.limit == 3
     assert hits == [{"text": "t", "session_id": "s1", "chunk_no": 2,
                      "created_at": 5, "score": 0.9}]
+
+
+def test_delete_agent_memory_filters_user_and_session():
+    s = _store()
+    s.delete_agent_memory("u1", "s1")
+    call = s.client.deleted[-1]
+    assert call["collection_name"] == s.agent_memory_collection
+    conds = call["filter_conditions"]
+    assert {"key": "user_id", "value": "u1"} in conds
+    assert {"key": "session_id", "value": "s1"} in conds

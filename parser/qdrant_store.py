@@ -144,6 +144,20 @@ class QdrantStore:
             })
         return hits
 
+    def delete_agent_memory(self, user_id: str, session_id: str) -> None:
+        """Delete ALL agent-memory vectors of one session. Filters on BOTH
+        user_id and session_id — cross-user isolation invariant."""
+        self.client.delete(
+            collection_name=self.agent_memory_collection,
+            points_selector=qm.FilterSelector(filter=qm.Filter(must=[
+                qm.FieldCondition(key="user_id",
+                                  match=qm.MatchValue(value=str(user_id))),
+                qm.FieldCondition(key="session_id",
+                                  match=qm.MatchValue(value=str(session_id))),
+            ])),
+            wait=True,
+        )
+
     def set_root_ids_for_file(self, file_id: str,
                               root_ids: list[str]) -> None:
         """Update root_ids + clear tombstone on BOTH text_chunks and
