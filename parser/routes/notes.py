@@ -61,7 +61,7 @@ async def notes_upsert(req: NotesUpsertRequest) -> dict:
     embs = _embed_batch([c.text for c in chunks])
     points = []
     for c, emb in zip(chunks, embs):
-        pid = str(uuid.uuid5(_NS, f"note:{req.note_id}:{c.chunk_no}"))
+        pid = str(uuid.uuid5(_NS, f"note:{req.user_id}:{req.note_id}:{c.chunk_no}"))
         points.append({
             "id": pid,
             "dense": emb["dense"],

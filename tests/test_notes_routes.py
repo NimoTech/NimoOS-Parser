@@ -79,3 +79,14 @@ def test_delete(client):
                json={"user_id": "1", "note_id": "n1"})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert ("1", "n1") in fake.deleted
+
+
+def test_upsert_point_ids_are_user_scoped(client):
+    c, fake = client
+    body = {"note_id": "n1", "note_type": "note", "status": "draft",
+            "created_by": "agent", "updated_at": 5,
+            "chunks": [{"chunk_no": 0, "text": "hello"}]}
+    c.post("/v1/parser/notes/upsert", json={**body, "user_id": "1"})
+    c.post("/v1/parser/notes/upsert", json={**body, "user_id": "2"})
+    ids = [p["id"] for p in fake.upserted]
+    assert len(ids) == 2 and ids[0] != ids[1]   # 不同用户同 note_id 绝不共享 point id
