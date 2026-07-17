@@ -64,6 +64,14 @@ def test_query_notes_filters_by_user_and_status():
     assert hits[0]["note_id"] == "n1" and hits[0]["score"] == 0.9
 
 
+def test_query_notes_filters_by_type():
+    s = _store()
+    s.query_notes("1", [0.1] * 4, limit=5, types=["insight", "note"])
+    _, qfilter, _ = s.client.queries[0]
+    keys = [c.key for c in qfilter.must]
+    assert "type" in keys
+
+
 def test_delete_note_filters_on_both_user_and_note():
     s = _store()
     s.delete_note("1", "n1")

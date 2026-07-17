@@ -32,6 +32,7 @@ class NotesQueryRequest(BaseModel):
     query: str
     top_k: int = Field(10, ge=1, le=50)
     statuses: list[str] | None = None
+    types: list[str] | None = None
 
 
 class NotesDeleteRequest(BaseModel):
@@ -84,7 +85,8 @@ async def notes_query(req: NotesQueryRequest) -> dict:
     dense = _embed_batch([req.query])[0]["dense"]
     hits = app_state.qstore.query_notes(req.user_id, dense,
                                         limit=req.top_k,
-                                        statuses=req.statuses)
+                                        statuses=req.statuses,
+                                        types=req.types)
     return {"hits": hits}
 
 

@@ -11,8 +11,8 @@ class _FakeQStore:
     def upsert_notes(self, points):
         self.upserted.extend(points)
 
-    def query_notes(self, user_id, dense, limit=10, statuses=None):
-        self.query_args = (user_id, limit, statuses)
+    def query_notes(self, user_id, dense, limit=10, statuses=None, types=None):
+        self.query_args = (user_id, limit, statuses, types)
         return [{"note_id": "n1", "chunk_no": 0, "text": "t",
                  "type": "note", "status": "curated", "updated_at": 1,
                  "score": 0.8}]
@@ -69,8 +69,16 @@ def test_query_passes_user_and_statuses(client):
         "user_id": "1", "query": "hello", "top_k": 3,
         "statuses": ["curated"]})
     assert r.status_code == 200
-    assert fake.query_args == ("1", 3, ["curated"])
+    assert fake.query_args == ("1", 3, ["curated"], None)
     assert r.json()["hits"][0]["note_id"] == "n1"
+
+
+def test_query_passes_types(client):
+    c, fake = client
+    r = c.post("/v1/parser/notes/query", json={
+        "user_id": "1", "query": "q", "top_k": 3, "types": ["insight"]})
+    assert r.status_code == 200
+    assert fake.query_args == ("1", 3, None, ["insight"])
 
 
 def test_delete(client):
