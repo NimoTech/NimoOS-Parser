@@ -249,12 +249,16 @@ class QdrantStore:
             self.client.upsert(self.notes_collection, points=batch, wait=True)
 
     def query_notes(self, user_id: str, dense: list, limit: int = 10,
-                    statuses: list[str] | None = None) -> list[dict]:
+                    statuses: list[str] | None = None,
+                    types: list[str] | None = None) -> list[dict]:
         must = [qm.FieldCondition(key="user_id",
                                   match=qm.MatchValue(value=str(user_id)))]
         if statuses:
             must.append(qm.FieldCondition(
                 key="status", match=qm.MatchAny(any=list(statuses))))
+        if types:
+            must.append(qm.FieldCondition(
+                key="type", match=qm.MatchAny(any=list(types))))
         resp = self.client.query_points(
             collection_name=self.notes_collection,
             query=dense,
