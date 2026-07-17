@@ -45,6 +45,7 @@ def _store(existing=()):
     s.text_collection = qs.TEXT_COLLECTION
     s.visual_collection = qs.VISUAL_COLLECTION
     s.agent_memory_collection = qs.AGENT_MEMORY_COLLECTION
+    s.notes_collection = qs.KNOWLEDGE_NOTES_COLLECTION
     s.client = FakeClient(existing)
     return s
 
@@ -54,11 +55,13 @@ def test_ensure_creates_agent_memory_when_absent():
     s.ensure_collections()
     assert qs.AGENT_MEMORY_COLLECTION in s.client.created
     assert (qs.AGENT_MEMORY_COLLECTION, "user_id") in s.client.indexed
+    # unrelated collection also gets ensured; must not interfere with the above
+    assert qs.KNOWLEDGE_NOTES_COLLECTION in s.client.created
 
 
 def test_ensure_skips_agent_memory_when_present():
     s = _store(existing=(qs.TEXT_COLLECTION, qs.VISUAL_COLLECTION,
-                         qs.AGENT_MEMORY_COLLECTION))
+                         qs.AGENT_MEMORY_COLLECTION, qs.KNOWLEDGE_NOTES_COLLECTION))
     s.ensure_collections()
     assert qs.AGENT_MEMORY_COLLECTION not in s.client.created
 

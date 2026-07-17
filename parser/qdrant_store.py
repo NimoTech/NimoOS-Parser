@@ -12,6 +12,9 @@ VISUAL_DENSE_DIM = 1152
 AGENT_MEMORY_COLLECTION = "agent_memory"
 AGENT_MEMORY_DENSE_DIM = 1024
 
+KNOWLEDGE_NOTES_COLLECTION = "knowledge_notes"
+KNOWLEDGE_NOTES_DENSE_DIM = 1024
+
 
 class QdrantStore:
     def __init__(self, url: str, grpc_port: int = 6334) -> None:
@@ -19,6 +22,7 @@ class QdrantStore:
         self.text_collection = TEXT_COLLECTION
         self.visual_collection = VISUAL_COLLECTION
         self.agent_memory_collection = AGENT_MEMORY_COLLECTION
+        self.notes_collection = KNOWLEDGE_NOTES_COLLECTION
 
     def ensure_collections(self) -> None:
         existing = {c.name for c in self.client.get_collections().collections}
@@ -57,10 +61,33 @@ class QdrantStore:
                 hnsw_config=qm.HnswConfigDiff(m=16, ef_construct=100),
                 on_disk_payload=True,
             )
+        if self.notes_collection not in existing:
+            self.client.create_collection(
+                collection_name=self.notes_collection,
+                vectors_config={
+                    "dense": qm.VectorParams(size=KNOWLEDGE_NOTES_DENSE_DIM,
+                                             distance=qm.Distance.COSINE),
+                },
+                sparse_vectors_config={
+                    "bm25": qm.SparseVectorParams(
+                        index=qm.SparseIndexParams(on_disk=False),
+                    ),
+                },
+                hnsw_config=qm.HnswConfigDiff(m=16, ef_construct=100),
+                on_disk_payload=True,
+            )
         for field in ("user_id", "session_id"):
             try:
                 self.client.create_payload_index(
                     self.agent_memory_collection, field_name=field,
+                    field_schema=qm.PayloadSchemaType.KEYWORD,
+                )
+            except Exception:
+                pass
+        for field in ("user_id", "note_id", "type", "status"):
+            try:
+                self.client.create_payload_index(
+                    self.notes_collection, field_name=field,
                     field_schema=qm.PayloadSchemaType.KEYWORD,
                 )
             except Exception:
@@ -202,6 +229,67 @@ class QdrantStore:
                 ])),
                 wait=True,
             )
+
+    def upsert_notes(self, points: Iterable[dict]) -> None:
+        batch = []
+        for p in points:
+            sparse = p["sparse"]
+            batch.append(qm.PointStruct(
+                id=p["id"],
+                vector={
+                    "dense": p["dense"],
+                    "bm25": qm.SparseVector(
+                        indices=list(sparse["indices"]),
+                        values=list(sparse["values"]),
+                    ),
+                },
+                payload=p["payload"],
+            ))
+        if batch:
+            self.client.upsert(self.notes_collection, points=batch, wait=True)
+
+    def query_notes(self, user_id: str, dense: list, limit: int = 10,
+                    statuses: list[str] | None = None) -> list[dict]:
+        must = [qm.FieldCondition(key="user_id",
+                                  match=qm.MatchValue(value=str(user_id)))]
+        if statuses:
+            must.append(qm.FieldCondition(
+                key="status", match=qm.MatchAny(any=list(statuses))))
+        resp = self.client.query_points(
+            collection_name=self.notes_collection,
+            query=dense,
+            using="dense",
+            query_filter=qm.Filter(must=must),
+            limit=limit,
+            with_payload=True,
+        )
+        hits = []
+        for pt in resp.points:
+            pl = pt.payload or {}
+            hits.append({
+                "note_id": pl.get("note_id", ""),
+                "chunk_no": pl.get("chunk_no", 0),
+                "text": pl.get("text", ""),
+                "type": pl.get("type", "note"),
+                "status": pl.get("status", ""),
+                "updated_at": pl.get("updated_at", 0),
+                "score": pt.score,
+            })
+        return hits
+
+    def delete_note(self, user_id: str, note_id: str) -> None:
+        """Delete ALL vectors of one note. Filters on BOTH user_id and
+        note_id — cross-user isolation invariant (mirrors agent_memory)."""
+        self.client.delete(
+            collection_name=self.notes_collection,
+            points_selector=qm.FilterSelector(filter=qm.Filter(must=[
+                qm.FieldCondition(key="user_id",
+                                  match=qm.MatchValue(value=str(user_id))),
+                qm.FieldCondition(key="note_id",
+                                  match=qm.MatchValue(value=str(note_id))),
+            ])),
+            wait=True,
+        )
 
     def count_vectors(self) -> dict:
         return {
