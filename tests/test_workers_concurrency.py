@@ -25,6 +25,14 @@ def conn(tmp_path: Path) -> sqlite3.Connection:
     return init_db(tmp_path / "parser.db")
 
 
+@pytest.fixture(autouse=True)
+def no_pacing(monkeypatch):
+    """These tests exercise scaling mechanics, not pacing. concurrency doubles
+    as the pacing tier (parser/pacing.py) so concurrency=1/2 here would
+    otherwise incur multi-second inter-job delays regardless of load."""
+    monkeypatch.setattr(WorkerPool, "_pacing_delay", lambda self: 0.0)
+
+
 @pytest.mark.asyncio
 async def test_scale_down_finishes_in_flight_job_cleanly(conn: sqlite3.Connection):
     """缩容时,正在跑的 job 必须走完 complete_job 写库,不应残留 in-flight"""

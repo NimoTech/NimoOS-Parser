@@ -1,10 +1,12 @@
 import asyncio
+import collections
 import json
 import logging
 import sqlite3
 import time
 from typing import Optional
 
+from parser import pacing
 from parser.repo_jobs import dequeue_job, complete_job, fail_job
 from parser.repo_records import set_last_error
 
@@ -12,11 +14,14 @@ log = logging.getLogger("parser.workers")
 
 
 class WorkerPool:
+    _WINDOW_S = 600.0
+
     def __init__(
         self, conn: sqlite3.Connection, *, text_pipeline, concurrency: int = 2,
         lease_s: int = 300, max_attempts: int = 5,
         idle_sleep_s: float = 0.5,
         wiki_client=None, parser_version: str = "parser/0.1.0",
+        load_ratio_fn=pacing.load_ratio,
     ) -> None:
         self.conn = conn
         self.text_pipeline = text_pipeline
@@ -26,6 +31,8 @@ class WorkerPool:
         self.idle_sleep_s = idle_sleep_s
         self.wiki_client = wiki_client
         self.parser_version = parser_version
+        self._load_ratio_fn = load_ratio_fn
+        self._done_ts: collections.deque = collections.deque()  # completion timestamps (10-min window)
         self._tasks: list[tuple[int, asyncio.Task]] = []
         self._worker_id_seq: int = 0
         self._worker_exit_flags: dict[int, asyncio.Event] = {}
@@ -34,6 +41,23 @@ class WorkerPool:
         self._run_event = asyncio.Event()
         # set = running, clear = paused (Python asyncio has no wait-until-cleared API)
         self._run_event.set()
+
+    def _pacing_delay(self) -> float:
+        return pacing.sleep_seconds(self.concurrency, self._load_ratio_fn())
+
+    def _record_done(self) -> None:
+        now = time.time()
+        self._done_ts.append(now)
+        while self._done_ts and self._done_ts[0] < now - self._WINDOW_S:
+            self._done_ts.popleft()
+
+    def throughput(self) -> dict:
+        """Rolling completion stats for /v1/parser/stats (spec §4.8)."""
+        now = time.time()
+        while self._done_ts and self._done_ts[0] < now - self._WINDOW_S:
+            self._done_ts.popleft()
+        n = len(self._done_ts)
+        return {"done_last_10m": n, "rate_per_min": round(n / (self._WINDOW_S / 60.0), 2)}
 
     async def start(self) -> None:
         self._stop.clear()
@@ -129,6 +153,7 @@ class WorkerPool:
                     complete_job, self.conn, job["id"],
                     int(time.time() * 1000),
                 )
+                self._record_done()
                 # Clear any stale last_error on this file (write-through to
                 # file_records so the file list API can answer status without
                 # joining parse_jobs).
@@ -152,6 +177,13 @@ class WorkerPool:
                     root_id=job["root_id"], path=job["path"], error=str(e),
                 )
                 await self._notify_wiki(job, status="failed", error=str(e))
+
+            delay = self._pacing_delay()
+            if delay > 0:
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                except asyncio.TimeoutError:
+                    pass
 
     async def _notify_wiki(self, job: sqlite3.Row, *,
                            status: str, error: Optional[str] = None) -> None:
