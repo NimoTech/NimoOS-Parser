@@ -20,6 +20,11 @@ def get_wiki_cursor_val(conn):
     return get_wiki_cursor(conn)
 
 
+def get_pool():
+    from parser.main import app_state
+    return getattr(app_state, "worker_pool", None)
+
+
 @router.get("/stats")
 async def stats() -> dict:
     conn = get_conn()
@@ -36,6 +41,13 @@ async def stats() -> dict:
     done = conn.execute(
         "SELECT COUNT(*) FROM parse_jobs WHERE done_at IS NOT NULL"
     ).fetchone()[0]
+
+    pool = get_pool()
+    tp = pool.throughput() if pool is not None else {"done_last_10m": 0, "rate_per_min": 0.0}
+    eta_s = None
+    if tp["rate_per_min"] > 0 and pending > 0:
+        eta_s = int(pending * 60 / tp["rate_per_min"])
+
     return {
         "queue_depth": {"pending": pending, "running": running,
                         "failed": failed, "done": done},
@@ -44,4 +56,7 @@ async def stats() -> dict:
         "total_vectors_visual": counts["visual"],
         "last_cursor_ms": get_wiki_cursor_val(conn),
         "models": models,
+        "done_last_10m": tp["done_last_10m"],
+        "rate_per_min": tp["rate_per_min"],
+        "eta_s": eta_s,
     }
