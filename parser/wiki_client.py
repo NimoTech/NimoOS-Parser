@@ -34,6 +34,10 @@ class WikiClient:
             fresh = self._read_discovery()
             if not fresh:
                 raise
+            # Concurrency invariant: this compare-and-swap of self._client is
+            # safe WITHOUT a lock only because there is no await between
+            # reading base_url and reassigning self._client — do not insert
+            # one (racing coroutines would double-swap/double-close).
             if fresh != str(self._client.base_url).rstrip("/"):
                 old = self._client
                 self._client = httpx.AsyncClient(base_url=fresh,

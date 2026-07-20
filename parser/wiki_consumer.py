@@ -95,6 +95,8 @@ class WikiConsumer:
                 pass
 
     def _ingest(self, events: list[dict]) -> None:
+        if not events:  # _loop guards this; keep future direct callers safe
+            return
         now = int(time.time() * 1000)
         for ev in events:
             op = _op_for_event(ev, self.conn)
