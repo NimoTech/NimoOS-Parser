@@ -17,7 +17,8 @@ def get_qstore():
 
 
 def get_wiki_cursor_val(conn):
-    return get_wiki_cursor(conn)
+    since_ms, _last_seq = get_wiki_cursor(conn)
+    return since_ms
 
 
 def get_pool():

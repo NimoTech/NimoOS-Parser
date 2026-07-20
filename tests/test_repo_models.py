@@ -23,6 +23,6 @@ def test_register_and_list(conn):
 
 
 def test_wiki_cursor(conn):
-    assert get_wiki_cursor(conn) == 0
-    set_wiki_cursor(conn, since_ms=1234, now_ms=5000)
-    assert get_wiki_cursor(conn) == 1234
+    assert get_wiki_cursor(conn) == (0, 0)
+    set_wiki_cursor(conn, since_ms=1234, last_seq=7, now_ms=5000)
+    assert get_wiki_cursor(conn) == (1234, 7)

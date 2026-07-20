@@ -6,7 +6,7 @@ from parser.wiki_client import WikiClient
 @pytest.mark.asyncio
 async def test_fetch_file_events(httpx_mock):
     httpx_mock.add_response(
-        url="http://wiki/v1/wiki/_internal/file-events?since=10&limit=100",
+        url="http://wiki/v1/wiki/_internal/file-events?since=10&after_seq=0&limit=100",
         json={"events": [{"id": "e1", "root_id": "r", "path": "/a.md",
                           "op": "create", "is_dir": 0,
                           "detected_at": 20}]},

@@ -79,9 +79,9 @@ class WikiConsumer:
         backoff = self.poll_interval_s
         while not self._stop.is_set():
             try:
-                since = await asyncio.to_thread(get_wiki_cursor, self.conn)
+                since, seq = await asyncio.to_thread(get_wiki_cursor, self.conn)
                 events = await self.wiki.fetch_file_events(
-                    since_ms=since, limit=self.poll_limit,
+                    since_ms=since, after_seq=seq, limit=self.poll_limit,
                 )
                 if events:
                     await asyncio.to_thread(self._ingest, events)
@@ -95,17 +95,18 @@ class WikiConsumer:
                 pass
 
     def _ingest(self, events: list[dict]) -> None:
-        max_seen = 0
         now = int(time.time() * 1000)
         for ev in events:
             op = _op_for_event(ev, self.conn)
-            detected = ev.get("detected_at", 0)
-            max_seen = max(max_seen, detected)
             if op is None:
                 continue
             enqueue_job(
                 self.conn, root_id=ev["root_id"], path=ev["path"], op=op,
                 priority=100, now_ms=now,
             )
-        if max_seen:
-            set_wiki_cursor(self.conn, since_ms=max_seen, now_ms=now)
+        # Wiki returns ORDER BY (detected_at, rowid); the last event IS the
+        # cursor. seq missing (old Wiki) degrades to the legacy detected_at
+        # cursor — never worse than before.
+        last = events[-1]
+        set_wiki_cursor(self.conn, since_ms=last.get("detected_at", 0),
+                        last_seq=last.get("seq", 0), now_ms=now)

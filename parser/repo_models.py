@@ -35,13 +35,16 @@ def get_active_models(conn: sqlite3.Connection) -> dict:
     return {r["name"]: {"version": r["version"], "modality": r["modality"], "dim": r["dim"]} for r in rows}
 
 
-def get_wiki_cursor(conn: sqlite3.Connection) -> int:
-    row = conn.execute("SELECT since_ms FROM wiki_cursor WHERE id = 1").fetchone()
-    return row["since_ms"]
+def get_wiki_cursor(conn: sqlite3.Connection) -> tuple[int, int]:
+    row = conn.execute(
+        "SELECT since_ms, last_seq FROM wiki_cursor WHERE id = 1"
+    ).fetchone()
+    return row["since_ms"], row["last_seq"]
 
 
-def set_wiki_cursor(conn: sqlite3.Connection, since_ms: int, now_ms: int) -> None:
+def set_wiki_cursor(conn: sqlite3.Connection, since_ms: int, last_seq: int,
+                    now_ms: int) -> None:
     conn.execute(
-        "UPDATE wiki_cursor SET since_ms = ?, updated_at = ? WHERE id = 1",
-        (since_ms, now_ms),
+        "UPDATE wiki_cursor SET since_ms = ?, last_seq = ?, updated_at = ? WHERE id = 1",
+        (since_ms, last_seq, now_ms),
     )

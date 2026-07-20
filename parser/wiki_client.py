@@ -10,11 +10,11 @@ class WikiClient:
                                           timeout=timeout_s)
 
     async def fetch_file_events(
-        self, *, since_ms: int, limit: int = 200,
+        self, *, since_ms: int, after_seq: int = 0, limit: int = 200,
     ) -> list[dict]:
         r = await self._client.get(
             "/v1/wiki/_internal/file-events",
-            params={"since": since_ms, "limit": limit},
+            params={"since": since_ms, "after_seq": after_seq, "limit": limit},
         )
         r.raise_for_status()
         return r.json().get("events", [])
