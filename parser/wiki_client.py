@@ -1,20 +1,60 @@
+import logging
+from pathlib import Path
 from typing import Optional
 
 import httpx
 
+log = logging.getLogger("parser.wiki_client")
+
 
 class WikiClient:
-    def __init__(self, base_url: str, *, timeout_s: float = 5.0) -> None:
-        self.base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self.base_url,
-                                          timeout=timeout_s)
+    def __init__(self, base_url: str, *, discovery_path: str | None = None,
+                 timeout: float = 10.0) -> None:
+        self._discovery_path = discovery_path
+        self._timeout = timeout
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
+
+    def _read_discovery(self) -> str | None:
+        if not self._discovery_path:
+            return None
+        try:
+            return Path(self._discovery_path).read_text().strip() or None
+        except OSError:
+            return None
+
+    async def _request(self, method: str, path: str, **kw) -> httpx.Response:
+        try:
+            return await self._client.request(method, path, **kw)
+        except httpx.RequestError:
+            # Wiki restarts on a random port and rewrites wiki.url; a frozen
+            # base_url strands us until our own restart (bitten 3x — the
+            # "service discovery hot-read" follow-up). Re-resolve and retry
+            # once; re-raise if discovery is unavailable or unchanged-and-
+            # still-failing.
+            fresh = self._read_discovery()
+            if not fresh:
+                raise
+            # Concurrency invariant: this compare-and-swap of self._client is
+            # safe WITHOUT a lock only because there is no await between
+            # reading base_url and reassigning self._client — do not insert
+            # one (racing coroutines would double-swap/double-close).
+            if fresh != str(self._client.base_url).rstrip("/"):
+                old = self._client
+                self._client = httpx.AsyncClient(base_url=fresh,
+                                                 timeout=self._timeout)
+                try:
+                    await old.aclose()
+                except Exception:  # noqa: BLE001 — best-effort close
+                    pass
+                log.info("wiki base_url re-resolved to %s", fresh)
+            return await self._client.request(method, path, **kw)
 
     async def fetch_file_events(
-        self, *, since_ms: int, limit: int = 200,
+        self, *, since_ms: int, after_seq: int = 0, limit: int = 200,
     ) -> list[dict]:
-        r = await self._client.get(
-            "/v1/wiki/_internal/file-events",
-            params={"since": since_ms, "limit": limit},
+        r = await self._request(
+            "GET", "/v1/wiki/_internal/file-events",
+            params={"since": since_ms, "after_seq": after_seq, "limit": limit},
         )
         r.raise_for_status()
         return r.json().get("events", [])
@@ -31,13 +71,13 @@ class WikiClient:
             body["modalities"] = modalities
         if error is not None:
             body["error"] = error
-        r = await self._client.post(
-            "/v1/wiki/_internal/index-status", json=body,
+        r = await self._request(
+            "POST", "/v1/wiki/_internal/index-status", json=body,
         )
         r.raise_for_status()
 
     async def list_roots(self) -> list[dict]:
-        r = await self._client.get("/v1/wiki/roots")
+        r = await self._request("GET", "/v1/wiki/roots")
         r.raise_for_status()
         return r.json().get("roots", [])
 

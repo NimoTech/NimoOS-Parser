@@ -12,7 +12,7 @@ class FakeWiki:
     def __init__(self, batches):
         self.batches = list(batches)
         self.calls = []
-    async def fetch_file_events(self, *, since_ms, limit):
+    async def fetch_file_events(self, *, since_ms, after_seq=0, limit):
         self.calls.append(since_ms)
         if not self.batches:
             return []
@@ -51,7 +51,7 @@ def test_consumer_enqueues_and_advances_cursor(conn):
     assert paths == ["/a.md", "/b.md", "/c.md"]
     ops = sorted(j["op"] for j in jobs)
     assert ops == ["delete", "index", "index"]
-    assert get_wiki_cursor(conn) == 200
+    assert get_wiki_cursor(conn) == (200, 0)
 
 
 def test_consumer_skips_directory_events(conn):
@@ -65,10 +65,47 @@ def test_consumer_skips_directory_events(conn):
         await c.start()
         for _ in range(30):
             await asyncio.sleep(0.02)
-            if get_wiki_cursor(conn) == 100:
+            if get_wiki_cursor(conn) == (100, 0):
                 break
         await c.stop()
 
     asyncio.run(runner())
     assert list_jobs(conn, status="pending", limit=10) == []
-    assert get_wiki_cursor(conn) == 100
+    assert get_wiki_cursor(conn) == (100, 0)
+
+
+def test_ingest_advances_cursor_to_last_event_seq(conn):
+    """同毫秒一批事件分页到达时,游标必须带 seq 前进,不许跳过后续页。"""
+    from parser.repo_models import get_wiki_cursor
+    from parser.wiki_consumer import WikiConsumer
+
+    consumer = WikiConsumer(conn, wiki=None)
+    ts = 1753000000000
+    page = [
+        {"root_id": "r", "path": f"/f{i}", "op": "create",
+         "is_dir": False, "detected_at": ts, "seq": 100 + i}
+        for i in range(3)
+    ]
+    consumer._ingest(page)
+    since, seq = get_wiki_cursor(conn)
+    assert since == ts
+    assert seq == 102
+
+
+def test_cursor_migration_adds_last_seq(tmp_path):
+    """旧库(无 last_seq 列)打开后自动迁移,默认 0。"""
+    import sqlite3
+    from parser.db import init_db
+
+    p = tmp_path / "old.db"
+    conn = sqlite3.connect(str(p))
+    conn.execute("CREATE TABLE wiki_cursor (id INTEGER PRIMARY KEY CHECK(id = 1), "
+                 "since_ms INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)")
+    conn.execute("INSERT INTO wiki_cursor(id, since_ms, updated_at) VALUES (1, 42, 0)")
+    conn.commit()
+    conn.close()
+
+    conn = init_db(p)
+    row = conn.execute("SELECT since_ms, last_seq FROM wiki_cursor WHERE id = 1").fetchone()
+    assert row["since_ms"] == 42
+    assert row["last_seq"] == 0

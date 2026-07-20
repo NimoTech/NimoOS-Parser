@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS model_versions (
 CREATE TABLE IF NOT EXISTS wiki_cursor (
   id          INTEGER PRIMARY KEY CHECK(id = 1),
   since_ms    INTEGER NOT NULL DEFAULT 0,
+  last_seq    INTEGER NOT NULL DEFAULT 0,
   updated_at  INTEGER NOT NULL
 );
 
@@ -96,6 +97,9 @@ CREATE INDEX IF NOT EXISTS idx_allowlist_folders_root
 # list doesn't reference a column SQLite hasn't added yet.
 _MIGRATION_DEVICE = "ALTER TABLE parser_state ADD COLUMN device TEXT NOT NULL DEFAULT 'auto';"
 _MIGRATION_OCR = "ALTER TABLE parser_state ADD COLUMN ocr_enabled INTEGER NOT NULL DEFAULT 0;"
+_MIGRATION_WIKI_CURSOR_SEQ = (
+    "ALTER TABLE wiki_cursor ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;"
+)
 
 
 def init_db(path: Path) -> sqlite3.Connection:
@@ -119,6 +123,11 @@ def init_db(path: Path) -> sqlite3.Connection:
         conn.execute(_MIGRATION_DEVICE)
     if cols and "ocr_enabled" not in cols:
         conn.execute(_MIGRATION_OCR)
+    wc_cols = {
+        r[1] for r in conn.execute("PRAGMA table_info(wiki_cursor)").fetchall()
+    }
+    if wc_cols and "last_seq" not in wc_cols:
+        conn.execute(_MIGRATION_WIKI_CURSOR_SEQ)
 
     conn.executescript(SCHEMA_SQL)
     # ensure wiki_cursor singleton
