@@ -266,3 +266,22 @@ def test_worker_clears_last_error_on_success(tmp_path):
         "SELECT last_error FROM file_records WHERE file_id='fid1'"
     ).fetchone()
     assert row["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_pacing_sleep_interruptible_by_exit_flag():
+    """省电档 pacing 睡眠(最长 60s)必须被 set_concurrency 缩容打断,
+    不然被裁的 worker 最多 60s 后才退出(M2 终审 Medium)。"""
+    from parser.workers import WorkerPool
+
+    pool = WorkerPool.__new__(WorkerPool)  # 只测 helper,不走完整构造
+    pool._stop = asyncio.Event()
+    flag = asyncio.Event()
+
+    async def trip():
+        await asyncio.sleep(0.05)
+        flag.set()
+
+    t = asyncio.get_event_loop().time()
+    await asyncio.gather(pool._interruptible_sleep(30.0, flag), trip())
+    assert asyncio.get_event_loop().time() - t < 5.0

@@ -115,6 +115,23 @@ class WorkerPool:
         for wid, _ in draining:
             self._worker_exit_flags.pop(wid, None)
 
+    async def _interruptible_sleep(self, delay: float,
+                                   exit_flag: asyncio.Event) -> None:
+        """Sleep up to `delay`, waking early on pool stop OR this worker's
+        drain flag (set_concurrency down used to strand drained workers in
+        the pacing sleep for up to 60s in power-save mode)."""
+        wait_stop = asyncio.create_task(self._stop.wait())
+        wait_exit = asyncio.create_task(exit_flag.wait())
+        try:
+            await asyncio.wait(
+                {wait_stop, wait_exit},
+                timeout=delay, return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for w in (wait_stop, wait_exit):
+                w.cancel()
+            await asyncio.gather(wait_stop, wait_exit, return_exceptions=True)
+
     async def _loop(self, worker_id: int) -> None:
         exit_flag = self._worker_exit_flags[worker_id]
         while not self._stop.is_set() and not exit_flag.is_set():
@@ -141,11 +158,7 @@ class WorkerPool:
                 dequeue_job, self.conn, lease_s=self.lease_s, now_ms=now,
             )
             if job is None:
-                try:
-                    await asyncio.wait_for(self._stop.wait(),
-                                            timeout=self.idle_sleep_s)
-                except asyncio.TimeoutError:
-                    pass
+                await self._interruptible_sleep(self.idle_sleep_s, exit_flag)
                 continue
             try:
                 await asyncio.to_thread(self._process, job)
@@ -180,10 +193,7 @@ class WorkerPool:
 
             delay = self._pacing_delay()
             if delay > 0:
-                try:
-                    await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                except asyncio.TimeoutError:
-                    pass
+                await self._interruptible_sleep(delay, exit_flag)
 
     async def _notify_wiki(self, job: sqlite3.Row, *,
                            status: str, error: Optional[str] = None) -> None:

@@ -1,3 +1,4 @@
+import httpx
 import pytest
 
 from parser.wiki_client import WikiClient
@@ -40,3 +41,31 @@ async def test_list_roots(httpx_mock):
     c = WikiClient(base_url="http://wiki")
     out = await c.list_roots()
     assert out[0]["id"] == "root1"
+
+
+@pytest.mark.asyncio
+async def test_wiki_client_rereads_discovery_on_connect_error(tmp_path, monkeypatch):
+    from parser.wiki_client import WikiClient
+
+    url_file = tmp_path / "wiki.url"
+    url_file.write_text("http://127.0.0.1:59999")  # 新地址
+    c = WikiClient("http://127.0.0.1:59998",       # 旧地址(已死)
+                   discovery_path=str(url_file))
+
+    calls = []
+
+    async def fake_request(self, method, path, **kw):
+        calls.append(str(self.base_url))
+        if len(calls) == 1:
+            raise httpx.ConnectError("refused")
+        # httpx internals: raise_for_status() requires a request bound to
+        # the response, which a bare httpx.Response(...) doesn't have.
+        resp = httpx.Response(200, json={"events": []},
+                              request=httpx.Request(method, path))
+        return resp
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", fake_request)
+    events = await c.fetch_file_events(since_ms=0, after_seq=0)
+    assert events == []
+    assert calls[0].startswith("http://127.0.0.1:59998")
+    assert calls[1].startswith("http://127.0.0.1:59999")

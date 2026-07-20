@@ -94,7 +94,9 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
 
     wiki_url = _read_wiki_url(settings.wiki_discovery_path)
     if wiki_url:
-        app_state.wiki_client = WikiClient(base_url=wiki_url)
+        app_state.wiki_client = WikiClient(
+            base_url=wiki_url, discovery_path=str(settings.wiki_discovery_path),
+        )
     else:
         log.warning("wiki discovery file not found at %s; consumer disabled",
                     settings.wiki_discovery_path)
