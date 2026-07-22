@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI
 
 from parser.config import PARSER_APP_VERSION
-from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, notes, rerank, render, rescan, stats, test as test_routes, version
+from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, notes, rerank, render, rescan, stats, test as test_routes, version, visual
 
 log = logging.getLogger("parser.main")
 
@@ -200,6 +200,9 @@ async def _full_lifecycle_shutdown() -> None:
         except Exception:
             pass
         app_state.conn = None
+    # 与 conn 同批在 _full_lifecycle_startup 里写入的 settings 也一并归零,
+    # 避免残留污染下一次(测试)生命周期。
+    app_state.settings = None
 
 
 @asynccontextmanager
@@ -254,6 +257,10 @@ async def _lifespan(app: FastAPI):
                 except Exception:
                     pass
                 app_state.conn = None
+                # 与 conn 同批打开的 settings 也一并归零,避免残留污染下一次
+                # (测试)生命周期——否则后续读 app_state.settings 的路由会拿到
+                # 本次残留值,而不是各自测试注入的环境变量覆盖。
+                app_state.settings = None
         else:
             await _full_lifecycle_shutdown()
         if discovery_path:
@@ -290,6 +297,7 @@ def create_app(*, skip_workers: bool = False) -> FastAPI:
     app.include_router(extract.router)
     app.include_router(render.router)
     app.include_router(version.router)
+    app.include_router(visual.router)
     app.state.skip_workers = skip_workers
     return app
 
