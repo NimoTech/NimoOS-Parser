@@ -112,7 +112,19 @@ class OpenVINOCaptionBackend:
     def caption(self, image_bytes: bytes) -> str:
         with self._lock:
             if self._pipe is None:
-                self._pipe = self._load_pipe()
+                # 三态覆盖(加载失败/推理异常/空输出)要求加载失败也必须
+                # 归一为 CaptionError:_load_pipe 内部对"目录不存在"已主动
+                # 抛 CaptionError,但 VLMPipeline(...) 构造本身抛出的原始
+                # 异常(IR 损坏、运行时错误等)若不在此处兜底会以原始类型
+                # 打穿。已是 CaptionError 的原样放行,避免重复包裹丢失语义。
+                # 加载失败时 self._pipe 保持 None(不赋值),下次调用可重试。
+                try:
+                    pipe = self._load_pipe()
+                except CaptionError:
+                    raise
+                except Exception as exc:
+                    raise CaptionError(f"vlm load failed: {exc}") from exc
+                self._pipe = pipe
                 self._ensure_sweeper()
             self._last_used = time.monotonic()
             try:

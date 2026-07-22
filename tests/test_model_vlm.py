@@ -1,7 +1,9 @@
 import threading
 import time
 
-from parser.model_vlm import OpenVINOCaptionBackend, PROMPT_V1
+import pytest
+
+from parser.model_vlm import CaptionError, OpenVINOCaptionBackend, PROMPT_V1
 
 
 class _FakePipe:
@@ -61,3 +63,23 @@ def test_version_and_prompt(tmp_path):
     b, _ = _backend(tmp_path)
     assert "qwen3-vl-4b-int4" in b.version and "prompt-v1" in b.version
     assert "English" in PROMPT_V1 or "sentences" in PROMPT_V1
+
+
+def test_load_failure_wrapped_as_caption_error_and_recoverable(tmp_path):
+    b = OpenVINOCaptionBackend(model_path=tmp_path, idle_ttl_s=300)
+
+    def _boom():
+        raise RuntimeError("IR corrupted")
+
+    b._load_pipe = _boom
+    b._decode_image = lambda data: data
+
+    with pytest.raises(CaptionError):
+        b.caption(b"x")
+    assert not b.is_loaded  # 加载失败后 _pipe 保持 None,可重试
+
+    fake = _FakePipe()
+    b._load_pipe = lambda: fake
+    out = b.caption(b"x")
+    assert out == "A dog running on the beach."
+    assert b.is_loaded and fake.calls == 1
