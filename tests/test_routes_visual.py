@@ -57,3 +57,22 @@ def test_ingest_rejects_traversal(client, img):
 def test_delete_without_pipeline_503(client):
     r = client.delete("/v1/parser/visual/assets/photos/a1")
     assert r.status_code == 503
+
+
+def test_delete_qdrant_midflight_failure_503(client):
+    # Qdrant 启动后中途瞬断:delete_asset 抛异常应被包成 503(可重试语义),
+    # 而不是裸 500 打穿。
+    from parser.main import app_state
+
+    class _BrokenPipeline:
+        def delete_asset(self, *, source, asset_id):
+            raise RuntimeError("qdrant connection refused")
+
+    prev = getattr(app_state, "visual_pipeline", None)
+    app_state.visual_pipeline = _BrokenPipeline()
+    try:
+        r = client.delete("/v1/parser/visual/assets/photos/a1")
+        assert r.status_code == 503
+        assert "retry" in r.json()["detail"]
+    finally:
+        app_state.visual_pipeline = prev

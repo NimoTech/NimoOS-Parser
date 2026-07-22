@@ -63,5 +63,10 @@ def delete_asset(source: str, asset_id: str):
     from parser.main import app_state
     if getattr(app_state, "visual_pipeline", None) is None:
         raise HTTPException(503, "visual pipeline unavailable (qdrant down?)")
-    app_state.visual_pipeline.delete_asset(source=source, asset_id=asset_id)
+    try:
+        app_state.visual_pipeline.delete_asset(source=source, asset_id=asset_id)
+    except Exception as exc:
+        # Qdrant 启动后中途瞬断:与上面"pipeline 未接线"分支同一错误语义,
+        # 删除不走 job 队列没有自动重试,交由调用方(Photos)收到 503 后重试。
+        raise HTTPException(503, f"qdrant unavailable, retry later: {exc}")
     return {"deleted": True}
