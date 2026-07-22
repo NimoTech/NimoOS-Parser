@@ -11,7 +11,8 @@ trap 'rm -rf "$WORK"' EXIT
 # 优先 python3.11(与服务一致),缺失时回退系统 python3。
 PY="$(command -v python3.11 || command -v python3)"
 "$PY" -m venv "$WORK/venv"
-"$WORK/venv/bin/pip" install --quiet "optimum-intel[openvino]>=1.27" "transformers>=4.57" "torch" "torchvision"
+# datasets:optimum-intel 对 VLM int4 默认做数据感知校准量化,缺它会在最后一步报错。
+"$WORK/venv/bin/pip" install --quiet "optimum-intel[openvino]>=1.27" "transformers>=4.57" "torch" "torchvision" "datasets"
 echo "==> exporting int4 IR to $OUT (首次会从 HF 拉 ~8GB 原始权重)"
 sudo mkdir -p "$OUT" && sudo chown "$(id -u):$(id -g)" "$OUT"
 "$WORK/venv/bin/optimum-cli" export openvino \
