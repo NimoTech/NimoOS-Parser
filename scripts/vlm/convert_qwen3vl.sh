@@ -7,7 +7,10 @@ set -euo pipefail
 OUT="${1:-/opt/nimoos-parser/models/qwen3-vl-4b-int4}"
 WORK="$(mktemp -d /tmp/qwen3vl-convert.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
-python3.11 -m venv "$WORK/venv"
+# 转换 venv 不受服务 venv 的 3.11 锁约束(那是 rapidocr 的限制),任取可用解释器;
+# 优先 python3.11(与服务一致),缺失时回退系统 python3。
+PY="$(command -v python3.11 || command -v python3)"
+"$PY" -m venv "$WORK/venv"
 "$WORK/venv/bin/pip" install --quiet "optimum-intel[openvino]>=1.27" "transformers>=4.57" "torch" "torchvision"
 echo "==> exporting int4 IR to $OUT (首次会从 HF 拉 ~8GB 原始权重)"
 sudo mkdir -p "$OUT" && sudo chown "$(id -u):$(id -g)" "$OUT"
