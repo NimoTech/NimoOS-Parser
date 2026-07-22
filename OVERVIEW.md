@@ -109,6 +109,18 @@ NimoOS RAG 层的**文档索引服务**。当前版本 `1.9.0-alpha1`(见 `parse
 
 ---
 
+## Visual pipeline(照片/视频 caption,2026-07-22 上线)
+
+Photos 服务投喂驱动的第二条入库管线(不走 wiki 事件、不走扩展名 allowlist):
+
+- **入口**:`POST /v1/parser/visual/ingest`(路径白名单 `VisualAllowedDirs` + resolve 防穿越,202 入 `parse_jobs` 队列,`op=visual_ingest`、`priority=200` 文档优先、载荷在 `sub_modality` JSON);`DELETE /v1/parser/visual/assets/{source}/{asset_id}` 同步硬删(Photos 是资产权威源,不走 tombstone;Qdrant 瞬断回 503 由调用方重试)。音频命名空间(`/v1/parser/audio/*`)预留未注册。
+- **推理**:`parser/model_vlm.py` 的 `OpenVINOCaptionBackend`——Qwen3-VL-4B int4(OpenVINO GenAI,IR 在 `/opt/nimoos-parser/models/qwen3-vl-4b-int4`,由 `scripts/vlm/convert_qwen3vl.sh` 一次性转换);懒加载单例 + 推理单并发锁 + 空闲 `VlmIdleTtlSec`(默认 300s)自动卸载(实测 RSS 9.5GB→2.5GB)。英文 caption(`PROMPT_V1`,检索导向),换模型 = 换适配器类。
+- **入库**:caption(+`Taken:` 元数据行,元数据不喂 VLM 防幻觉)→ BGE-M3 → `text_chunks`,`kind="caption"`、`file_id="photos:<asset_id>"`、`lang="en"`、`source_model_version="qwen3-vl-4b-int4/prompt-v1"`——payload 与文档块同构,Search 检索零改动覆盖。每资产单块,幂等(先删后写,point id 确定性)。
+- **实测**(Intel CPU,2026-07-22):冷加载全链 ~60s,热推理 ~35s/张;worker 的 pacing 节流对 visual job 同样生效(高负载时批量补扫会被拉长,产品取舍)。
+- **运维**:部署前必须先跑转换脚本产出 IR,否则批量投喂会每张重试 5 次后归档失败;`visual_chunks` collection 仍为预留空壳(图像向量检索走 Photos+immich-ml)。
+
+---
+
 ## 嵌入模型 / Device / Qdrant collection
 
 ### 模型
