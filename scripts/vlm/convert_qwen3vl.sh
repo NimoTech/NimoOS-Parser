@@ -15,7 +15,11 @@ PY="$(command -v python3.11 || command -v python3)"
 "$WORK/venv/bin/pip" install --quiet "optimum-intel[openvino]>=1.27" "transformers>=4.57" "torch" "torchvision" "datasets"
 echo "==> exporting int4 IR to $OUT (首次会从 HF 拉 ~8GB 原始权重)"
 sudo mkdir -p "$OUT" && sudo chown "$(id -u):$(id -g)" "$OUT"
+# 显式给定 int4 参数以绕开该架构的预置量化配置(默认带 AWQ+外网校准图片下载,
+# 校准图 URL 偶发坏图会让转换在最后一步崩;data-free 权重压缩稳定可复现,
+# 质量略逊 AWQ 校准版,后续想提质量可另行带 --awq --dataset contextual 重转)。
 "$WORK/venv/bin/optimum-cli" export openvino \
-    -m Qwen/Qwen3-VL-4B-Instruct --weight-format int4 "$OUT"
+    -m Qwen/Qwen3-VL-4B-Instruct --weight-format int4 \
+    --group-size 128 --ratio 1.0 "$OUT"
 # head 提前退出会给 ls 发 SIGPIPE,pipefail 下会把成功的转换误报为非零退出码,兜一层 true。
 echo "==> done:"; du -sh "$OUT"; ls "$OUT" | head || true
