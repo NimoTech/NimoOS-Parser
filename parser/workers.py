@@ -17,7 +17,8 @@ class WorkerPool:
     _WINDOW_S = 600.0
 
     def __init__(
-        self, conn: sqlite3.Connection, *, text_pipeline, concurrency: int = 2,
+        self, conn: sqlite3.Connection, *, text_pipeline, visual_pipeline=None,
+        concurrency: int = 2,
         lease_s: int = 300, max_attempts: int = 5,
         idle_sleep_s: float = 0.5,
         wiki_client=None, parser_version: str = "parser/0.1.0",
@@ -25,6 +26,7 @@ class WorkerPool:
     ) -> None:
         self.conn = conn
         self.text_pipeline = text_pipeline
+        self.visual_pipeline = visual_pipeline
         self.concurrency = concurrency
         self.lease_s = lease_s
         self.max_attempts = max_attempts
@@ -174,7 +176,10 @@ class WorkerPool:
                     set_last_error, self.conn,
                     root_id=job["root_id"], path=job["path"], error=None,
                 )
-                await self._notify_wiki(job, status="indexed" if job["op"] != "delete" else "deleted")
+                # visual op(视觉资产入库)不走 Wiki 回执协议——那是给 Wiki
+                # 文件类 job 用的确认通道,visual_ingest 的调用方是 Photos。
+                if not job["op"].startswith("visual"):
+                    await self._notify_wiki(job, status="indexed" if job["op"] != "delete" else "deleted")
             except Exception as e:
                 log.exception("worker %s failed job id=%s", worker_id, job["id"])
                 await asyncio.to_thread(
@@ -189,7 +194,8 @@ class WorkerPool:
                     set_last_error, self.conn,
                     root_id=job["root_id"], path=job["path"], error=str(e),
                 )
-                await self._notify_wiki(job, status="failed", error=str(e))
+                if not job["op"].startswith("visual"):
+                    await self._notify_wiki(job, status="failed", error=str(e))
 
             delay = self._pacing_delay()
             if delay > 0:
@@ -239,5 +245,17 @@ class WorkerPool:
                     root_id=job["root_id"], path=job["path"],
                     now_ms=int(time.time() * 1000),
                 )
+        elif op == "visual_ingest":
+            if self.visual_pipeline is None:
+                # Qdrant 掉线时 startup 不接线;抛错让 job 走失败重试,
+                # Qdrant 恢复后 retry_failed_jobs 可整批捞回。
+                raise RuntimeError("visual pipeline not wired (qdrant down?)")
+            payload = json.loads(job["sub_modality"] or "{}")
+            self.visual_pipeline.ingest_asset(
+                source=job["root_id"], asset_id=payload["asset_id"],
+                image_path=job["path"], mime=payload.get("mime", "image/jpeg"),
+                meta=payload.get("meta", {}),
+                now_ms=int(time.time() * 1000),
+            )
         else:
             raise ValueError(f"unknown op: {op}")

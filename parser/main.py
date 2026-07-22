@@ -23,6 +23,7 @@ class AppState:
     consumer: object = None
     worker_pool: object = None
     wiki_client: object = None
+    visual_pipeline: object = None
     gc_task: Optional[asyncio.Task] = None
     tombstone_task: Optional[asyncio.Task] = None
     tombstone_wake: Optional[asyncio.Event] = None
@@ -65,6 +66,9 @@ def _register_active_models(conn) -> None:
     register_model(conn, name="bge-reranker-v2-m3", version="v1",
                    modality="rerank", dim=None, registered_at=now)
     set_active(conn, name="bge-reranker-v2-m3", version="v1")
+    register_model(conn, name="qwen3-vl-4b-int4", version="prompt-v1",
+                   modality="caption", dim=None, registered_at=now)
+    set_active(conn, name="qwen3-vl-4b-int4", version="prompt-v1")
 
 
 async def _full_lifecycle_startup(app: FastAPI) -> None:
@@ -108,11 +112,24 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
             embedder=_LazyBGEM3Adapter(),
             parser_version=settings.parser_version,
         )
+        from parser.model_vlm import OpenVINOCaptionBackend
+        from parser.pipeline_visual import VisualPipeline
+        caption_backend = OpenVINOCaptionBackend(
+            model_path=settings.vlm_model_path,
+            idle_ttl_s=settings.vlm_idle_ttl_s,
+        )
+        app_state.visual_pipeline = VisualPipeline(
+            app_state.conn, qstore=app_state.qstore,
+            embedder=_LazyBGEM3Adapter(),
+            caption_backend=caption_backend,
+            parser_version=settings.parser_version,
+        )
         from parser.repo_state import get_state
         _state = get_state(app_state.conn)
         # Use DB-persisted concurrency as the initial value for the pool.
         app_state.worker_pool = WorkerPool(
             app_state.conn, text_pipeline=pipeline,
+            visual_pipeline=app_state.visual_pipeline,
             concurrency=_state["concurrency"],
             lease_s=settings.job_lease_s,
             wiki_client=app_state.wiki_client,
@@ -188,6 +205,7 @@ async def _full_lifecycle_shutdown() -> None:
         except Exception as e:
             log.warning("worker_pool stop failed: %s", e)
         app_state.worker_pool = None
+    app_state.visual_pipeline = None
     if app_state.wiki_client is not None:
         try:
             await app_state.wiki_client.aclose()
