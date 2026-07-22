@@ -25,3 +25,9 @@ rapidocr-onnxruntime>=1.4
 pytest>=8.0
 pytest-asyncio>=0.24
 pytest-httpx>=0.30
+
+# ---- visual pipeline(照片 caption,Qwen3-VL OpenVINO 推理)----
+# 转换期依赖(optimum-intel 等)不在此列,见 scripts/vlm/convert_qwen3vl.sh。
+openvino>=2026.1
+openvino-genai>=2026.1
+pillow>=10

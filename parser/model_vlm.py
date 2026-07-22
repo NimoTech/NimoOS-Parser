@@ -1,0 +1,142 @@
+"""Qwen3-VL caption 适配器 —— visual pipeline 的可替换推理后端。
+
+与 model_bge_m3.py 的懒加载单例同源,但多两件事:
+1. 闲置卸载:VLM int4 运行时 4-6GB,不能像 BGE-M3 那样常驻;空闲超过
+   idle_ttl_s 由后台清扫线程 unload(借鉴 immich-ml MODEL_TTL 语义)。
+2. 单并发锁:CPU 上 VLM 推理吃满核,多并发只会互相拖慢并翻倍内存,
+   一把锁串行化(spec 既定 VlmConcurrency=1,如未来放开在此改语义)。
+openvino_genai / PIL / numpy 全部 deferred import:无这些依赖的环境
+(CI 单测)也能 import 本模块并用注入替身测试。
+"""
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+log = logging.getLogger("parser.model_vlm")
+
+PROMPT_V1 = (
+    "Describe this photo in 1-3 English sentences for search indexing. "
+    "Cover the main subjects, the scene, any visible actions, and notable "
+    "details such as colors, counts, or visible text. Output plain text "
+    "only, no preamble, no speculation about intent."
+)
+
+# 模型标识固定为 qwen3-vl-4b-int4,与实际存放路径(model_path)解耦——
+# version 字符串用于 model_versions 台账比对,不应随本地路径改名而漂移。
+_MODEL_ID = "qwen3-vl-4b-int4"
+_PROMPT_VERSION = "prompt-v1"
+
+_SWEEP_INTERVAL_S = 60
+
+
+class CaptionError(Exception):
+    """caption 生成失败(加载失败/推理异常/输出为空)。"""
+
+
+class OpenVINOCaptionBackend:
+    """Qwen3-VL(OpenVINO GenAI, int4)caption 推理后端。
+
+    懒加载单例风格(参照 model_bge_m3.py),额外提供闲置自动卸载与
+    单并发推理锁。线程安全:_lock 同时保护加载态与推理调用。
+    """
+
+    def __init__(self, model_path: Path, idle_ttl_s: int = 300) -> None:
+        self.model_path = Path(model_path)
+        self.idle_ttl_s = idle_ttl_s
+        self.version = f"{_MODEL_ID}/{_PROMPT_VERSION}"
+        self._pipe = None
+        self._lock = threading.Lock()      # 加载 + 推理单并发
+        self._last_used = 0.0
+        self._sweeper_started = False
+
+    # -- 可注入点(测试替身) -------------------------------------------
+    def _load_pipe(self):
+        import openvino_genai  # deferred:部署时 pip 装,单测不需要
+        if not self.model_path.is_dir():
+            raise CaptionError(
+                f"VLM model dir not found: {self.model_path} — run "
+                "scripts/vlm/convert_qwen3vl.sh first")
+        log.info("loading VLM from %s (CPU)", self.model_path)
+        return openvino_genai.VLMPipeline(str(self.model_path), "CPU")
+
+    def _decode_image(self, image_bytes: bytes):
+        import io
+        import numpy as np
+        import openvino as ov
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        return ov.Tensor(np.array(img))
+
+    # -- 生命周期 -------------------------------------------------------
+    @property
+    def is_loaded(self) -> bool:
+        return self._pipe is not None
+
+    def unload(self) -> None:
+        with self._lock:
+            self._unload_locked()
+
+    def _unload_locked(self) -> None:
+        if self._pipe is not None:
+            log.info("unloading idle VLM (ttl=%ss)", self.idle_ttl_s)
+            self._pipe = None
+            import gc
+            gc.collect()
+
+    def _sweep(self, now: Optional[float] = None) -> None:
+        """空闲清扫;now 参数供测试注入虚拟时钟。"""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            if self._pipe is not None and now - self._last_used > self.idle_ttl_s:
+                self._unload_locked()
+
+    def _ensure_sweeper(self) -> None:
+        if self._sweeper_started:
+            return
+        self._sweeper_started = True
+
+        def loop() -> None:
+            while True:
+                time.sleep(_SWEEP_INTERVAL_S)
+                try:
+                    self._sweep()
+                except Exception:  # 清扫失败不致命,下轮再试
+                    log.exception("vlm sweeper failed")
+
+        threading.Thread(target=loop, daemon=True,
+                          name="vlm-idle-sweeper").start()
+
+    # -- 推理 -----------------------------------------------------------
+    def caption(self, image_bytes: bytes) -> str:
+        with self._lock:
+            if self._pipe is None:
+                # 三态覆盖(加载失败/推理异常/空输出)要求加载失败也必须
+                # 归一为 CaptionError:_load_pipe 内部对"目录不存在"已主动
+                # 抛 CaptionError,但 VLMPipeline(...) 构造本身抛出的原始
+                # 异常(IR 损坏、运行时错误等)若不在此处兜底会以原始类型
+                # 打穿。已是 CaptionError 的原样放行,避免重复包裹丢失语义。
+                # 加载失败时 self._pipe 保持 None(不赋值),下次调用可重试。
+                try:
+                    pipe = self._load_pipe()
+                except CaptionError:
+                    raise
+                except Exception as exc:
+                    raise CaptionError(f"vlm load failed: {exc}") from exc
+                self._pipe = pipe
+                self._ensure_sweeper()
+            self._last_used = time.monotonic()
+            try:
+                tensor = self._decode_image(image_bytes)
+                result = self._pipe.generate(
+                    PROMPT_V1, images=[tensor], max_new_tokens=128)
+            except Exception as exc:
+                raise CaptionError(f"vlm inference failed: {exc}") from exc
+            self._last_used = time.monotonic()
+        # openvino_genai.VLMPipeline.generate 的返回类型随版本可能是
+        # str 或 DecodedResults——str(result) 兜住两者。
+        text = str(result).strip()
+        if not text:
+            raise CaptionError("vlm returned empty caption")
+        return text

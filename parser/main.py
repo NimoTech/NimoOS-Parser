@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI
 
 from parser.config import PARSER_APP_VERSION
-from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, notes, rerank, render, rescan, stats, test as test_routes, version
+from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, notes, rerank, render, rescan, stats, test as test_routes, version, visual
 
 log = logging.getLogger("parser.main")
 
@@ -23,6 +23,7 @@ class AppState:
     consumer: object = None
     worker_pool: object = None
     wiki_client: object = None
+    visual_pipeline: object = None
     gc_task: Optional[asyncio.Task] = None
     tombstone_task: Optional[asyncio.Task] = None
     tombstone_wake: Optional[asyncio.Event] = None
@@ -65,6 +66,9 @@ def _register_active_models(conn) -> None:
     register_model(conn, name="bge-reranker-v2-m3", version="v1",
                    modality="rerank", dim=None, registered_at=now)
     set_active(conn, name="bge-reranker-v2-m3", version="v1")
+    register_model(conn, name="qwen3-vl-4b-int4", version="prompt-v1",
+                   modality="caption", dim=None, registered_at=now)
+    set_active(conn, name="qwen3-vl-4b-int4", version="prompt-v1")
 
 
 async def _full_lifecycle_startup(app: FastAPI) -> None:
@@ -108,11 +112,24 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
             embedder=_LazyBGEM3Adapter(),
             parser_version=settings.parser_version,
         )
+        from parser.model_vlm import OpenVINOCaptionBackend
+        from parser.pipeline_visual import VisualPipeline
+        caption_backend = OpenVINOCaptionBackend(
+            model_path=settings.vlm_model_path,
+            idle_ttl_s=settings.vlm_idle_ttl_s,
+        )
+        app_state.visual_pipeline = VisualPipeline(
+            app_state.conn, qstore=app_state.qstore,
+            embedder=_LazyBGEM3Adapter(),
+            caption_backend=caption_backend,
+            parser_version=settings.parser_version,
+        )
         from parser.repo_state import get_state
         _state = get_state(app_state.conn)
         # Use DB-persisted concurrency as the initial value for the pool.
         app_state.worker_pool = WorkerPool(
             app_state.conn, text_pipeline=pipeline,
+            visual_pipeline=app_state.visual_pipeline,
             concurrency=_state["concurrency"],
             lease_s=settings.job_lease_s,
             wiki_client=app_state.wiki_client,
@@ -188,6 +205,7 @@ async def _full_lifecycle_shutdown() -> None:
         except Exception as e:
             log.warning("worker_pool stop failed: %s", e)
         app_state.worker_pool = None
+    app_state.visual_pipeline = None
     if app_state.wiki_client is not None:
         try:
             await app_state.wiki_client.aclose()
@@ -200,6 +218,9 @@ async def _full_lifecycle_shutdown() -> None:
         except Exception:
             pass
         app_state.conn = None
+    # 与 conn 同批在 _full_lifecycle_startup 里写入的 settings 也一并归零,
+    # 避免残留污染下一次(测试)生命周期。
+    app_state.settings = None
 
 
 @asynccontextmanager
@@ -254,6 +275,10 @@ async def _lifespan(app: FastAPI):
                 except Exception:
                     pass
                 app_state.conn = None
+                # 与 conn 同批打开的 settings 也一并归零,避免残留污染下一次
+                # (测试)生命周期——否则后续读 app_state.settings 的路由会拿到
+                # 本次残留值,而不是各自测试注入的环境变量覆盖。
+                app_state.settings = None
         else:
             await _full_lifecycle_shutdown()
         if discovery_path:
@@ -290,6 +315,7 @@ def create_app(*, skip_workers: bool = False) -> FastAPI:
     app.include_router(extract.router)
     app.include_router(render.router)
     app.include_router(version.router)
+    app.include_router(visual.router)
     app.state.skip_workers = skip_workers
     return app
 
