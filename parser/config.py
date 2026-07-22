@@ -28,6 +28,12 @@ class Settings:
     parser_version: str = PARSER_VERSION
     bind_host: str = "127.0.0.1"
     bind_port: int = 8283
+    # visual pipeline:VLM 模型权重目录(懒加载,空闲超时后卸载释放显存/内存)
+    vlm_model_path: Path = Path("/opt/nimoos-parser/models/qwen3-vl-4b-int4")
+    # visual pipeline:VLM 模型空闲多久(秒)后自动卸载
+    vlm_idle_ttl_s: int = 300
+    # visual pipeline:允许喂给 VLM 的目录白名单(逗号分隔),防止越权读取任意路径
+    visual_allowed_dirs: str = "/DATA/.system_data/photos/thumbs"
 
 
 _INT_KEYS = {
@@ -39,17 +45,20 @@ _INT_KEYS = {
     "GcIntervalSec": "gc_interval_s",
     "QdrantGrpcPort": "qdrant_grpc_port",
     "BindPort": "bind_port",
+    "VlmIdleTtlSec": "vlm_idle_ttl_s",
 }
 _PATH_KEYS = {
     "DataPath": "data_path",
     "RuntimePath": "runtime_path",
     "LogPath": "log_path",
     "WikiDiscoveryPath": "wiki_discovery_path",
+    "VlmModelPath": "vlm_model_path",
 }
 _STR_KEYS = {
     "QdrantUrl": "qdrant_url",
     "BindHost": "bind_host",
     "ParserVersion": "parser_version",
+    "VisualAllowedDirs": "visual_allowed_dirs",
 }
 
 
