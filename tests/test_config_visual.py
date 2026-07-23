@@ -22,3 +22,27 @@ def test_visual_conf_override(tmp_path):
     assert s.vlm_model_path == Path("/tmp/claude-models/vlm")
     assert s.vlm_idle_ttl_s == 60
     assert s.visual_allowed_dirs == "/a/thumbs,/b/thumbs"
+
+
+def test_vlm_multiplatform_defaults():
+    """backendselect 多平台自适应:设备选择开关 + GGUF 权重路径默认值。"""
+    s = Settings()
+    assert s.vlm_device == "auto"
+    assert s.vlm_gguf_model == Path(
+        "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/model.gguf")
+    assert s.vlm_gguf_mmproj == Path(
+        "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/mmproj.gguf")
+
+
+def test_vlm_multiplatform_conf_override(tmp_path):
+    conf = tmp_path / "parser.conf"
+    conf.write_text(
+        "[parser]\n"
+        "VlmDevice = llamacpp:vulkan\n"
+        "VlmGgufModel = /tmp/claude-models/gguf/model.gguf\n"
+        "VlmGgufMmproj = /tmp/claude-models/gguf/mmproj.gguf\n"
+    )
+    s = load_settings(conf)
+    assert s.vlm_device == "llamacpp:vulkan"
+    assert s.vlm_gguf_model == Path("/tmp/claude-models/gguf/model.gguf")
+    assert s.vlm_gguf_mmproj == Path("/tmp/claude-models/gguf/mmproj.gguf")

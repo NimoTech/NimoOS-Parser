@@ -112,10 +112,16 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
             embedder=_LazyBGEM3Adapter(),
             parser_version=settings.parser_version,
         )
-        from parser.model_vlm import OpenVINOCaptionBackend
+        from parser.backendselect import select_caption_backend
         from parser.pipeline_visual import VisualPipeline
-        caption_backend = OpenVINOCaptionBackend(
+        # 按 vlm_device 探测/选择多平台 caption 后端(Intel OpenVINO / AMD·NVIDIA
+        # GGUF+llama.cpp),返回的 SelectingCaptionBackend 对 VisualPipeline 透明,
+        # 与单一后端实现同一个 CaptionBackend 接口。
+        caption_backend = select_caption_backend(
+            vlm_device=settings.vlm_device,
             model_path=settings.vlm_model_path,
+            gguf_path=settings.vlm_gguf_model,
+            mmproj_path=settings.vlm_gguf_mmproj,
             idle_ttl_s=settings.vlm_idle_ttl_s,
         )
         app_state.visual_pipeline = VisualPipeline(
