@@ -233,3 +233,69 @@ def test_selecting_backend_no_demote_on_inference_failure(monkeypatch, tmp_path,
     assert wrapper._backend is stub     # 活跃后端未变
     assert wrapper._index == 0          # 候选链索引未变
     assert not any("降级" in r.getMessage() for r in caplog.records)  # 无降级 Warn
+
+
+def test_selecting_backend_no_demote_on_cold_start_first_frame_failure(
+        monkeypatch, tmp_path, caplog):
+    """冷启动首帧场景:调用前 is_loaded 为 False(TTL 卸载后的窗口),但
+    本次 caption() 调用内部先加载成功(模拟 `_load_pipe` 落地)、随后才对
+    这张图推理失败(模拟 `_infer` 失败)——真实状态是"加载没问题,只是
+    这张图坏",不能因为调用前采样的快照是 False 就误判成"加载失败"进而
+    触发降级。判定必须在异常抛出后再读 is_loaded,而不是用调用前的快照。
+    """
+
+    class _LoadsThenFailsWithinSameCall:
+        """同一次 caption() 调用内:先把内部 loaded 标志置 True(模拟
+        `_load_pipe` 成功),再抛 CaptionError(模拟 `_infer` 失败)。"""
+
+        def __init__(self):
+            self._loaded = False
+            self.unloaded = False
+
+        @property
+        def is_loaded(self):
+            return self._loaded
+
+        def caption(self, image_bytes):
+            self._loaded = True  # 模拟 _load_pipe 在本次调用内已经成功落地
+            # 紧接着模拟 _infer 对这张(坏)图推理失败
+            raise bs.CaptionError("simulated infer failure right after cold load")
+
+        def unload(self):
+            self.unloaded = True
+            self._loaded = False
+
+        version = "cold-start-first-frame/backend"
+
+    stub = _LoadsThenFailsWithinSameCall()
+    built = []
+
+    def fake_build_backend(spec, **kwargs):
+        built.append(spec)
+        return stub
+
+    monkeypatch.setattr(bs, "build_backend", fake_build_backend)
+
+    ranked = [
+        {"runtime": "openvino", "device": "GPU.1", "tier": 30, "label": "arc"},
+        {"runtime": "llamacpp", "device": "cuda", "tier": 30, "label": "other"},
+    ]
+    wrapper = bs.SelectingCaptionBackend(
+        ranked,
+        model_path=tmp_path,
+        gguf_path=tmp_path / "m.gguf",
+        mmproj_path=tmp_path / "mm.gguf",
+        idle_ttl_s=60,
+    )
+
+    assert wrapper.is_loaded is False  # 调用前尚未加载——冷启动首帧的前提条件
+
+    with caplog.at_level(logging.WARNING, logger="parser.backendselect"):
+        with pytest.raises(bs.CaptionError):
+            wrapper.caption(b"bad-image-right-after-cold-load")
+
+    assert built == ["openvino:GPU.1"]  # 只构建过一次,未曾降级重建
+    assert stub.unloaded is False       # 未被 _demote 卸载
+    assert wrapper._backend is stub     # 活跃后端未变
+    assert wrapper._index == 0          # 候选链索引未变
+    assert not any("降级" in r.getMessage() for r in caplog.records)  # 无降级 Warn

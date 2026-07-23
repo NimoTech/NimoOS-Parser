@@ -260,13 +260,17 @@ class SelectingCaptionBackend:
 
     def caption(self, image_bytes: bytes) -> str:
         while True:
-            was_loaded = self._backend.is_loaded
             try:
                 return self._backend.caption(image_bytes)
             except CaptionError:
-                # 只有加载阶段失败(调用前未加载)才降级;已加载后端的单次
-                # 推理失败/空输出不改变后端选择,异常原样抛给调用方。
-                if was_loaded or not self._demote():
+                # 判定必须在异常发生后读取 is_loaded,不能用调用前采样的
+                # 快照——冷启动首帧场景下,调用前 is_loaded=False,但本次
+                # 调用内 `_load_pipe` 可能已经成功(`_pipe` 落地),随后
+                # `_infer` 才失败;此时异常后读到的 is_loaded 才是真实值。
+                # 加载失败(_pipe 保持 None,is_loaded 仍为 False)才降级;
+                # 已加载后端的单次推理失败/空输出(is_loaded 为 True)不
+                # 改变后端选择,异常原样抛给调用方。
+                if self._backend.is_loaded or not self._demote():
                     raise
 
     def unload(self) -> None:
