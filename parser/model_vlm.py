@@ -7,6 +7,11 @@
    一把锁串行化(spec 既定 VlmConcurrency=1,如未来放开在此改语义)。
 openvino_genai / PIL / numpy 全部 deferred import:无这些依赖的环境
 (CI 单测)也能 import 本模块并用注入替身测试。
+
+`_BaseCaptionBackend` 承载与具体推理引擎无关的生命周期骨架(懒加载/
+闲置清扫/单并发锁/三态包装),不同推理后端(OpenVINO/未来其它平台)
+只需继承并实现 `_load_pipe()`(返回底层 pipeline 对象)与
+`_infer(pipe, image_bytes) -> str`(用给定 pipeline 做一次推理)。
 """
 import logging
 import threading
@@ -35,39 +40,32 @@ class CaptionError(Exception):
     """caption 生成失败(加载失败/推理异常/输出为空)。"""
 
 
-class OpenVINOCaptionBackend:
-    """Qwen3-VL(OpenVINO GenAI, int4)caption 推理后端。
+class _BaseCaptionBackend:
+    """caption 推理后端的懒加载单例骨架(与具体推理引擎无关)。
 
-    懒加载单例风格(参照 model_bge_m3.py),额外提供闲置自动卸载与
-    单并发推理锁。线程安全:_lock 同时保护加载态与推理调用。
+    子类必须实现:
+    - `_load_pipe()`:构造并返回底层 pipeline 对象;加载失败时应抛出
+      `CaptionError`(或任意异常,`caption` 会兜底包装)。
+    - `_infer(pipe, image_bytes) -> str`:用给定 pipeline 对一张图片
+      做一次推理,返回文本(可以未 strip/未判空,由 `caption` 统一处理)。
+
+    线程安全:`_lock` 同时保护加载态与推理调用,懒加载单例风格
+    (参照 model_bge_m3.py),额外提供闲置自动卸载与单并发推理锁。
     """
 
-    def __init__(self, model_path: Path, idle_ttl_s: int = 300) -> None:
-        self.model_path = Path(model_path)
+    def __init__(self, idle_ttl_s: int = 300) -> None:
         self.idle_ttl_s = idle_ttl_s
-        self.version = f"{_MODEL_ID}/{_PROMPT_VERSION}"
         self._pipe = None
         self._lock = threading.Lock()      # 加载 + 推理单并发
         self._last_used = 0.0
         self._sweeper_started = False
 
-    # -- 可注入点(测试替身) -------------------------------------------
+    # -- 可注入点(子类实现) ---------------------------------------------
     def _load_pipe(self):
-        import openvino_genai  # deferred:部署时 pip 装,单测不需要
-        if not self.model_path.is_dir():
-            raise CaptionError(
-                f"VLM model dir not found: {self.model_path} — run "
-                "scripts/vlm/convert_qwen3vl.sh first")
-        log.info("loading VLM from %s (CPU)", self.model_path)
-        return openvino_genai.VLMPipeline(str(self.model_path), "CPU")
+        raise NotImplementedError
 
-    def _decode_image(self, image_bytes: bytes):
-        import io
-        import numpy as np
-        import openvino as ov
-        from PIL import Image
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        return ov.Tensor(np.array(img))
+    def _infer(self, pipe, image_bytes: bytes) -> str:
+        raise NotImplementedError
 
     # -- 生命周期 -------------------------------------------------------
     @property
@@ -114,7 +112,7 @@ class OpenVINOCaptionBackend:
             if self._pipe is None:
                 # 三态覆盖(加载失败/推理异常/空输出)要求加载失败也必须
                 # 归一为 CaptionError:_load_pipe 内部对"目录不存在"已主动
-                # 抛 CaptionError,但 VLMPipeline(...) 构造本身抛出的原始
+                # 抛 CaptionError,但底层 pipeline 构造本身抛出的原始
                 # 异常(IR 损坏、运行时错误等)若不在此处兜底会以原始类型
                 # 打穿。已是 CaptionError 的原样放行,避免重复包裹丢失语义。
                 # 加载失败时 self._pipe 保持 None(不赋值),下次调用可重试。
@@ -128,15 +126,45 @@ class OpenVINOCaptionBackend:
                 self._ensure_sweeper()
             self._last_used = time.monotonic()
             try:
-                tensor = self._decode_image(image_bytes)
-                result = self._pipe.generate(
-                    PROMPT_V1, images=[tensor], max_new_tokens=128)
+                result = self._infer(self._pipe, image_bytes)
             except Exception as exc:
                 raise CaptionError(f"vlm inference failed: {exc}") from exc
             self._last_used = time.monotonic()
-        # openvino_genai.VLMPipeline.generate 的返回类型随版本可能是
-        # str 或 DecodedResults——str(result) 兜住两者。
+        # 底层推理返回类型随引擎/版本可能不是纯 str——统一 str() 兜住。
         text = str(result).strip()
         if not text:
             raise CaptionError("vlm returned empty caption")
         return text
+
+
+class OpenVINOCaptionBackend(_BaseCaptionBackend):
+    """Qwen3-VL(OpenVINO GenAI, int4)caption 推理后端。"""
+
+    def __init__(self, model_path: Path, device: str = "CPU",
+                 idle_ttl_s: int = 300) -> None:
+        super().__init__(idle_ttl_s=idle_ttl_s)
+        self.model_path = Path(model_path)
+        self.device = device
+        self.version = f"{_MODEL_ID}/{_PROMPT_VERSION}/{device}"
+
+    def _load_pipe(self):
+        import openvino_genai  # deferred:部署时 pip 装,单测不需要
+        if not self.model_path.is_dir():
+            raise CaptionError(
+                f"VLM model dir not found: {self.model_path} — run "
+                "scripts/vlm/convert_qwen3vl.sh first")
+        log.info("loading VLM from %s (%s)", self.model_path, self.device)
+        return openvino_genai.VLMPipeline(str(self.model_path), self.device)
+
+    def _decode_image(self, image_bytes: bytes):
+        import io
+        import numpy as np
+        import openvino as ov
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        return ov.Tensor(np.array(img))
+
+    def _infer(self, pipe, image_bytes: bytes) -> str:
+        tensor = self._decode_image(image_bytes)
+        result = pipe.generate(PROMPT_V1, images=[tensor], max_new_tokens=128)
+        return str(result)

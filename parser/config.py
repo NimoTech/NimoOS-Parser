@@ -34,6 +34,15 @@ class Settings:
     vlm_idle_ttl_s: int = 300
     # visual pipeline:允许喂给 VLM 的目录白名单(逗号分隔),防止越权读取任意路径
     visual_allowed_dirs: str = "/DATA/.system_data/photos/thumbs"
+    # visual pipeline:caption 后端选择——"auto" 走 backendselect 硬件探测打分,
+    # 也可显式指定 "runtime:device"(如 "llamacpp:cuda"/"openvino:GPU.0")跳过探测
+    vlm_device: str = "auto"
+    # visual pipeline:GGUF 路线(AMD/NVIDIA,经 llama.cpp 推理)的量化权重文件
+    vlm_gguf_model: Path = Path(
+        "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/model.gguf")
+    # visual pipeline:GGUF 路线的多模态投影权重文件(与 vlm_gguf_model 配套)
+    vlm_gguf_mmproj: Path = Path(
+        "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/mmproj.gguf")
 
 
 _INT_KEYS = {
@@ -53,12 +62,15 @@ _PATH_KEYS = {
     "LogPath": "log_path",
     "WikiDiscoveryPath": "wiki_discovery_path",
     "VlmModelPath": "vlm_model_path",
+    "VlmGgufModel": "vlm_gguf_model",
+    "VlmGgufMmproj": "vlm_gguf_mmproj",
 }
 _STR_KEYS = {
     "QdrantUrl": "qdrant_url",
     "BindHost": "bind_host",
     "ParserVersion": "parser_version",
     "VisualAllowedDirs": "visual_allowed_dirs",
+    "VlmDevice": "vlm_device",
 }
 
 
