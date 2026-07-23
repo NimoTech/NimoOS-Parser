@@ -22,7 +22,6 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from parser.model_vlm import CaptionError, OpenVINOCaptionBackend
 from parser.model_vlm_llamacpp import LlamaCppCaptionBackend
@@ -213,9 +212,11 @@ class SelectingCaptionBackend:
     的 CaptionBackend 接口(caption/unload/version/is_loaded),对
     VisualPipeline 等调用方透明。
 
-    `caption()` 对当前活跃后端加载/推理失败(`CaptionError`)时,按候选链
-    降级到下一个候选、重建后端并重试;链尾恒定补齐 openvino:CPU 兜底
-    (纯 CPU 推理,理论上一定能跑),降级到链尾仍失败则把异常原样抛出。
+    `caption()` 只在当前活跃后端**加载失败**时才按候选链降级——单张图片
+    推理失败/空输出(后端已加载成功,`is_loaded` 为 True)不会触发降级,
+    异常原样抛给调用方,避免健康后端因偶发坏图被永久错误降级到 CPU。
+    降级时重建后端并重试;链尾恒定补齐 openvino:CPU 兜底(纯 CPU 推理,
+    理论上一定能跑),降级到链尾仍失败(且仍是加载失败)则把异常原样抛出。
     每次降级都记一条 Warn,便于运维定位"为什么用的不是预期后端"。
     """
 
@@ -242,9 +243,14 @@ class SelectingCaptionBackend:
             mmproj_path=self._mmproj_path, idle_ttl_s=self._idle_ttl_s)
 
     def _demote(self) -> bool:
-        """降级到候选链的下一项;链尾已到头返回 False。"""
+        """降级到候选链的下一项;链尾已到头返回 False。
+
+        重建前先显式 `.unload()` 旧后端(照 `_BaseCaptionBackend._unload_locked`
+        的范式),不依赖 GC 隐式回收 GB 级原生对象。
+        """
         if self._index + 1 >= len(self._ranked):
             return False
+        self._backend.unload()
         self._index += 1
         candidate = self._ranked[self._index]
         log.warning("VLM 后端降级:切换到 %s(%s)",
@@ -254,10 +260,13 @@ class SelectingCaptionBackend:
 
     def caption(self, image_bytes: bytes) -> str:
         while True:
+            was_loaded = self._backend.is_loaded
             try:
                 return self._backend.caption(image_bytes)
             except CaptionError:
-                if not self._demote():
+                # 只有加载阶段失败(调用前未加载)才降级;已加载后端的单次
+                # 推理失败/空输出不改变后端选择,异常原样抛给调用方。
+                if was_loaded or not self._demote():
                     raise
 
     def unload(self) -> None:

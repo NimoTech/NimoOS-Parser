@@ -103,11 +103,14 @@ def test_selecting_backend_fallback(monkeypatch, tmp_path, caplog):
     """首选候选加载即抛 CaptionError → 降级到下一候选并重试成功。"""
 
     class _Bad:
+        def __init__(self):
+            self.unloaded = False
+
         def caption(self, image_bytes):
             raise bs.CaptionError("simulated load failure")
 
         def unload(self):
-            pass
+            self.unloaded = True
 
         @property
         def is_loaded(self):
@@ -129,10 +132,15 @@ def test_selecting_backend_fallback(monkeypatch, tmp_path, caplog):
         version = "good/backend"
 
     built = []
+    bad_instances = []
 
     def fake_build_backend(spec, **kwargs):
         built.append(spec)
-        return _Bad() if spec == "openvino:GPU.1" else _Good()
+        if spec == "openvino:GPU.1":
+            bad = _Bad()
+            bad_instances.append(bad)
+            return bad
+        return _Good()
 
     monkeypatch.setattr(bs, "build_backend", fake_build_backend)
 
@@ -156,3 +164,72 @@ def test_selecting_backend_fallback(monkeypatch, tmp_path, caplog):
     assert len(caplog.records) >= 1  # 降级必须 Warn
     assert wrapper.version == "good/backend"
     assert wrapper.is_loaded is True
+    assert bad_instances[0].unloaded is True  # _demote 必须先 unload 旧后端再重建
+
+
+def test_selecting_backend_no_demote_on_inference_failure(monkeypatch, tmp_path, caplog):
+    """已加载后端单次推理失败(坏图)不应触发降级,异常原样抛出。"""
+
+    class _LoadsThenBadImage:
+        """模拟 is_loaded False→True 变化:首次调用加载成功并返回结果,
+        之后(已加载状态下)推理失败,抛出 CaptionError。"""
+
+        def __init__(self):
+            self._loaded = False
+            self.unloaded = False
+            self.call_count = 0
+
+        @property
+        def is_loaded(self):
+            return self._loaded
+
+        def caption(self, image_bytes):
+            self.call_count += 1
+            if not self._loaded:
+                self._loaded = True
+                return "first good caption"
+            raise bs.CaptionError("simulated inference failure on bad image")
+
+        def unload(self):
+            self.unloaded = True
+            self._loaded = False
+
+        version = "loaded-then-bad-image/backend"
+
+    stub = _LoadsThenBadImage()
+    built = []
+
+    def fake_build_backend(spec, **kwargs):
+        built.append(spec)
+        return stub
+
+    monkeypatch.setattr(bs, "build_backend", fake_build_backend)
+
+    # 链上还有下一个候选可供降级——如果错误地降级,测试也能捕获到。
+    ranked = [
+        {"runtime": "openvino", "device": "GPU.1", "tier": 30, "label": "arc"},
+        {"runtime": "llamacpp", "device": "cuda", "tier": 30, "label": "other"},
+    ]
+    wrapper = bs.SelectingCaptionBackend(
+        ranked,
+        model_path=tmp_path,
+        gguf_path=tmp_path / "m.gguf",
+        mmproj_path=tmp_path / "mm.gguf",
+        idle_ttl_s=60,
+    )
+
+    # 第一次调用:加载成功并返回结果。
+    out = wrapper.caption(b"good-image")
+    assert out == "first good caption"
+    assert stub.is_loaded is True
+
+    # 第二次调用:后端已加载,这次是单张坏图推理失败——不应降级。
+    with caplog.at_level(logging.WARNING, logger="parser.backendselect"):
+        with pytest.raises(bs.CaptionError):
+            wrapper.caption(b"bad-image")
+
+    assert built == ["openvino:GPU.1"]  # 只构建过一次,未曾降级重建
+    assert stub.unloaded is False       # 未被 _demote 卸载
+    assert wrapper._backend is stub     # 活跃后端未变
+    assert wrapper._index == 0          # 候选链索引未变
+    assert not any("降级" in r.getMessage() for r in caplog.records)  # 无降级 Warn
