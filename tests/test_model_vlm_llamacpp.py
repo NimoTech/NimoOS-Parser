@@ -3,7 +3,14 @@
 与 test_model_vlm_openvino 系列同款风格:用 fake 注入替身跳过真实
 llama_cpp 依赖,只验证 `_BaseCaptionBackend` 骨架 + 本后端特有的
 version 拼接 / _infer 组包逻辑。
+
+注意:以下测试全部通过重写 `b._load_pipe` 绕开了 `_load_pipe` 内部真实
+的 handler 构造逻辑,因此此前 `Qwen25VLChatHandler`(不存在的类名)写错
+也不会被任何用例发现,直到本机冒烟才暴露。`test_load_pipe_uses_mtmd_handler`
+改为 monkeypatch `sys.modules["llama_cpp"]` 注入 fake 模块,让 `_load_pipe`
+走真实实现,断言其构造的 handler 类名与参数。
 """
+import sys
 import threading
 import time
 
@@ -111,3 +118,84 @@ def test_gpu_layers_and_backend_tag_in_version(tmp_path):
                                 n_gpu_layers=32, backend_tag="rocm")
     assert b.n_gpu_layers == 32
     assert "rocm" in b.version and "gguf" in b.version
+
+
+class _FakeMTMDChatHandler:
+    """记录构造参数的 fake handler —— 断言类名/参数是本用例的核心。"""
+
+    instances = []
+
+    def __init__(self, clip_model_path):
+        self.clip_model_path = clip_model_path
+        _FakeMTMDChatHandler.instances.append(self)
+
+
+class _FakeQwen25VLChatHandler:
+    """占位:仅用于证明真实代码没有构造这个(已废弃)类名的 handler。"""
+
+    instances = []
+
+    def __init__(self, clip_model_path):
+        self.clip_model_path = clip_model_path
+        _FakeQwen25VLChatHandler.instances.append(self)
+
+
+class _FakeChatFormatModule:
+    MTMDChatHandler = _FakeMTMDChatHandler
+    Qwen25VLChatHandler = _FakeQwen25VLChatHandler
+
+
+class _FakeLlamaCtor:
+    """记录 llama_cpp.Llama(...) 构造调用的 fake 类。"""
+
+    instances = []
+
+    def __init__(self, model_path, chat_handler, n_gpu_layers, n_ctx, verbose):
+        self.model_path = model_path
+        self.chat_handler = chat_handler
+        self.n_gpu_layers = n_gpu_layers
+        self.n_ctx = n_ctx
+        self.verbose = verbose
+        _FakeLlamaCtor.instances.append(self)
+
+
+class _FakeLlamaCppModule:
+    llama_chat_format = _FakeChatFormatModule
+    Llama = _FakeLlamaCtor
+
+
+def test_load_pipe_uses_mtmd_handler(tmp_path, monkeypatch):
+    """回归测试:_load_pipe 必须构造 MTMDChatHandler(不是已废弃/不存在
+    的 Qwen25VLChatHandler),且把 mmproj 路径原样传给 clip_model_path。
+
+    通过 monkeypatch sys.modules["llama_cpp"] 注入 fake 模块,让
+    LlamaCppCaptionBackend._load_pipe 走真实实现(不重写 _load_pipe),
+    这样类名写错才会被测试捕捉到。
+    """
+    _FakeMTMDChatHandler.instances.clear()
+    _FakeQwen25VLChatHandler.instances.clear()
+    _FakeLlamaCtor.instances.clear()
+    monkeypatch.setitem(sys.modules, "llama_cpp", _FakeLlamaCppModule())
+
+    gguf = tmp_path / "m.gguf"
+    mmproj = tmp_path / "mm.gguf"
+    gguf.write_bytes(b"fake-gguf")
+    mmproj.write_bytes(b"fake-mmproj")
+    b = LlamaCppCaptionBackend(gguf_path=gguf, mmproj_path=mmproj,
+                                n_gpu_layers=16, backend_tag="rocm")
+
+    pipe = b._load_pipe()
+
+    # 必须走 MTMDChatHandler,一次且仅一次,不能构造已废弃的类名。
+    assert len(_FakeMTMDChatHandler.instances) == 1
+    assert not _FakeQwen25VLChatHandler.instances
+    handler = _FakeMTMDChatHandler.instances[0]
+    assert handler.clip_model_path == str(mmproj)
+
+    # Llama(...) 拿到的正是上面这个 handler 实例,且路径/gpu 层数透传正确。
+    assert len(_FakeLlamaCtor.instances) == 1
+    llama = _FakeLlamaCtor.instances[0]
+    assert llama.chat_handler is handler
+    assert llama.model_path == str(gguf)
+    assert llama.n_gpu_layers == 16
+    assert pipe is llama

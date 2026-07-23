@@ -27,18 +27,26 @@ if [[ "$GGUF_MODE" -eq 1 ]]; then
     PY="$(command -v python3.11 || command -v python3)"
     "$PY" -m venv "$WORK/venv"
     "$WORK/venv/bin/pip" install --quiet "huggingface-hub>=0.24"
-    echo "==> downloading GGUF (Q4_K_M) + mmproj (F16) to $OUT"
+    echo "==> downloading GGUF (Q4_K_M) + mmproj to $OUT"
     sudo mkdir -p "$OUT" && sudo chown "$(id -u):$(id -g)" "$OUT"
-    # --include 用通配符只拉 Q4_K_M 主权重与 F16 mmproj,避免把仓库里其它量化档位
-    # (Q8_0/BF16 等)一并下载,节省带宽与磁盘。
-    "$WORK/venv/bin/huggingface-cli" download \
-        Qwen/Qwen3-VL-4B-Instruct-GGUF \
-        --include "*Q4_K_M*" "*mmproj*F16*" \
-        --local-dir "$WORK/download"
+    # huggingface-cli download 的多模式 --include 语法在 huggingface_hub 1.24
+    # 里已弃用/解析失败(打 help 空退),改用 Python 内联调 snapshot_download,
+    # allow_patterns 拉 Q4_K_M 主权重与全部 mmproj 档位(仓库同时放了 F16/Q8_0
+    # 等多个 mmproj 量化档,find 时再挑 F16 那个,避免带宽/磁盘浪费在不需要的
+    # Q8_0/BF16 主权重上)。
+    "$WORK/venv/bin/python" -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    'Qwen/Qwen3-VL-4B-Instruct-GGUF',
+    allow_patterns=['*Q4_K_M*', '*mmproj*'],
+    local_dir='$WORK/download',
+)
+"
     # 下载产物文件名带仓库/量化档位前缀,重命名/软链为 config.py 默认路径约定的
-    # model.gguf / mmproj.gguf,推理侧无需关心具体量化档位命名。
+    # model.gguf / mmproj.gguf,推理侧无需关心具体量化档位命名。mmproj 同时存在
+    # F16/Q8_0 等档位时优先取 F16(精度更高,mmproj 本身体积小,不必省这点带宽)。
     MODEL_SRC="$(find "$WORK/download" -iname '*Q4_K_M*.gguf' | head -n1)"
-    MMPROJ_SRC="$(find "$WORK/download" -iname '*mmproj*F16*.gguf' | head -n1)"
+    MMPROJ_SRC="$(find "$WORK/download" -iname 'mmproj*F16*.gguf' | head -n1)"
     if [[ -z "$MODEL_SRC" || -z "$MMPROJ_SRC" ]]; then
         echo "!! 未找到预期的 Q4_K_M 主权重或 F16 mmproj 文件,检查仓库文件列表是否变更" >&2
         exit 1

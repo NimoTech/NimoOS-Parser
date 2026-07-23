@@ -58,9 +58,10 @@ class LlamaCppCaptionBackend(_BaseCaptionBackend):
         log.info("loading GGUF VLM from %s + mmproj %s (n_gpu_layers=%s, %s)",
                   self.gguf_path, self.mmproj_path, self.n_gpu_layers,
                   self.backend_tag)
-        # Qwen2VLChatHandler 兼容 Qwen 系视觉投影权重格式,负责把图片
-        # 编码结果接到 chat 消息里的 image_url 内容块。
-        chat_handler = llama_cpp.llama_chat_format.Qwen25VLChatHandler(
+        # MTMDChatHandler 是 llama.cpp 新的统一多模态入口(mtmd),吃 GGUF
+        # mmproj 投影权重把图片编码结果接进 chat 消息的 image_url 内容块;
+        # Qwen3-VL 无专属 handler,走这个通用 mtmd handler(经本机 CPU 冒烟核实)。
+        chat_handler = llama_cpp.llama_chat_format.MTMDChatHandler(
             clip_model_path=str(self.mmproj_path))
         return llama_cpp.Llama(
             model_path=str(self.gguf_path),
