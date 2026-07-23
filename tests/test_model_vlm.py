@@ -1,5 +1,7 @@
+import sys
 import threading
 import time
+import types
 
 import pytest
 
@@ -83,3 +85,33 @@ def test_load_failure_wrapped_as_caption_error_and_recoverable(tmp_path):
     out = b.caption(b"x")
     assert out == "A dog running on the beach."
     assert b.is_loaded and fake.calls == 1
+
+
+def test_device_defaults_to_cpu(tmp_path):
+    b = OpenVINOCaptionBackend(model_path=tmp_path)
+    assert b.device == "CPU"
+    assert "CPU" in b.version
+
+
+def test_device_param_reflected_in_version(tmp_path):
+    b = OpenVINOCaptionBackend(model_path=tmp_path, device="GPU.1")
+    assert "GPU.1" in b.version
+
+
+def test_load_pipe_passes_device_to_vlmpipeline(tmp_path, monkeypatch):
+    """_load_pipe 必须把 self.device 透传给 openvino_genai.VLMPipeline。"""
+    captured = {}
+
+    class _FakeVLMPipeline:
+        def __init__(self, model_path, device):
+            captured["model_path"] = model_path
+            captured["device"] = device
+
+    fake_module = types.SimpleNamespace(VLMPipeline=_FakeVLMPipeline)
+    monkeypatch.setitem(sys.modules, "openvino_genai", fake_module)
+
+    b = OpenVINOCaptionBackend(model_path=tmp_path, device="GPU.1")
+    b._load_pipe()
+
+    assert captured["device"] == "GPU.1"
+    assert captured["model_path"] == str(tmp_path)
