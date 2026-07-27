@@ -4,6 +4,48 @@ import pytest
 
 
 @pytest.fixture
+def captions_ctx(tmp_path):
+    # 照 test_routes_files_reindex.py 的 FakeQstore 注入惯例:先建 conn/qstore
+    # 再 create_app,skip_workers 模式不碰 app_state.qstore,测试全程可控。
+    from parser.main import app_state, create_app
+    from parser.db import init_db
+    from fastapi.testclient import TestClient
+
+    class FakeQstore:
+        def __init__(self):
+            self.calls = []
+
+        def scroll_captions(self, source, limit, offset):
+            self.calls.append((source, limit, offset))
+            if offset is None:
+                return (
+                    [{"file_id": "photos:a1", "text": "A dog.", "mtime_ms": 1}],
+                    "cursor2",
+                )
+            if offset == "cursor2":
+                return (
+                    [{"file_id": "photos:a2", "text": "A cat.", "mtime_ms": 2}],
+                    None,
+                )
+            return ([], None)
+
+    conn = init_db(tmp_path / "captions.db")
+    prev_conn = app_state.conn
+    prev_qstore = app_state.qstore
+    app_state.conn = conn
+    fake = FakeQstore()
+    app_state.qstore = fake
+    app = create_app(skip_workers=True)
+    try:
+        with TestClient(app) as c:
+            yield c, fake
+    finally:
+        app_state.conn = prev_conn
+        app_state.qstore = prev_qstore
+        conn.close()
+
+
+@pytest.fixture
 def img(tmp_path, monkeypatch):
     d = tmp_path / "thumbs"
     d.mkdir()
@@ -76,3 +118,72 @@ def test_delete_qdrant_midflight_failure_503(client):
         assert "retry" in r.json()["detail"]
     finally:
         app_state.visual_pipeline = prev
+
+
+def test_captions_export_basic(captions_ctx):
+    client_visual, fake = captions_ctx
+    r1 = client_visual.get(
+        "/v1/parser/visual/captions?source=photos&limit=512")
+    assert r1.status_code == 200
+    body = r1.json()
+    assert body["items"] == [{"asset_id": "a1", "text": "A dog.", "mtime_ms": 1}]
+    assert body["next_offset"] == "cursor2"
+
+    r2 = client_visual.get(
+        "/v1/parser/visual/captions?source=photos&offset=cursor2")
+    assert r2.status_code == 200
+    body2 = r2.json()
+    assert body2["items"][0]["asset_id"] == "a2"
+    assert body2["next_offset"] is None
+
+    # scroll_captions 收到的 limit/offset 与 query 参数一致透传
+    assert fake.calls[0] == ("photos", 512, None)
+    assert fake.calls[1] == ("photos", 512, "cursor2")
+
+
+def test_captions_export_strips_only_matching_prefix(captions_ctx):
+    client_visual, fake = captions_ctx
+
+    def scroll_captions(source, limit, offset):
+        return (
+            [
+                {"file_id": "photos:a1", "text": "A dog.", "mtime_ms": 1},
+                {"file_id": "wiki:xyz", "text": "irrelevant", "mtime_ms": 9},
+            ],
+            None,
+        )
+
+    fake.scroll_captions = scroll_captions
+    r = client_visual.get("/v1/parser/visual/captions?source=photos")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["items"] == [{"asset_id": "a1", "text": "A dog.", "mtime_ms": 1}]
+
+
+def test_captions_export_empty_offset_normalizes_to_none(captions_ctx):
+    # 契约字面示例 `offset=`(显式空字符串)——FastAPI 绑成 ""而非 None,
+    # handler 需归一化,否则透传给 qdrant scroll 会解析失败被包成 503。
+    client_visual, fake = captions_ctx
+    r = client_visual.get("/v1/parser/visual/captions?source=photos&offset=")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["items"] == [{"asset_id": "a1", "text": "A dog.", "mtime_ms": 1}]
+    assert body["next_offset"] == "cursor2"
+    assert fake.calls[-1] == ("photos", 512, None)
+
+
+def test_captions_export_limit_clamped(captions_ctx):
+    client_visual, fake = captions_ctx
+    client_visual.get("/v1/parser/visual/captions?source=photos&limit=99999")
+    assert fake.calls[-1][1] == 1024
+    client_visual.get("/v1/parser/visual/captions?source=photos&limit=0")
+    assert fake.calls[-1][1] == 1
+
+
+def test_captions_export_qdrant_down_503(client, monkeypatch):
+    # 不依赖 app_state.qstore 的环境默认值(全量 suite 下可能被先跑的测试
+    # 改成非 None 且未清理)——显式 monkeypatch 置 None,自动恢复,消除顺序依赖。
+    from parser.main import app_state
+    monkeypatch.setattr(app_state, "qstore", None)
+    r = client.get("/v1/parser/visual/captions?source=photos")
+    assert r.status_code == 503

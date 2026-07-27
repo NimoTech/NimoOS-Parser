@@ -4,7 +4,7 @@ import logging
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from parser.repo_jobs import enqueue_job
@@ -56,6 +56,43 @@ def ingest(req: IngestReq):
         now_ms=int(time.time() * 1000),
     )
     return {"job_id": job_id}
+
+
+@router.get("/captions")
+def export_captions(
+    source: str = Query(min_length=1, pattern=r"^[a-z0-9_-]+$"),
+    limit: int = 512,
+    offset: str | None = None,
+):
+    """批量导出某 source 下的 caption(scroll 分页游标)。
+    供 Photos 周期 diff 拉取(智能时刻策展地基),存量增量同路径:首次全量拉
+    完即为存量,之后按 mtime_ms 在 Photos 侧自行做增量判断。"""
+    from parser.main import app_state
+    if app_state.qstore is None:
+        raise HTTPException(503, "qdrant unavailable (qstore not ready)")
+    limit = max(1, min(limit, 1024))
+    offset = offset or None  # 契约里 `offset=`(空字符串)等价首页,归一化成 None 再往下传
+    prefix = f"{source}:"
+    try:
+        points, next_offset = app_state.qstore.scroll_captions(
+            source, limit, offset)
+    except Exception as exc:
+        # 与 delete_asset 同一错误语义:瞬断交由调用方(Photos)收到 503 后重试。
+        raise HTTPException(503, f"qdrant unavailable, retry later: {exc}")
+    items = []
+    for p in points:
+        file_id = p.get("file_id", "")
+        if not file_id.startswith(prefix):
+            continue
+        items.append({
+            "asset_id": file_id[len(prefix):],
+            "text": p.get("text", ""),
+            "mtime_ms": p.get("mtime_ms"),
+        })
+    return {
+        "items": items,
+        "next_offset": None if next_offset is None else str(next_offset),
+    }
 
 
 @router.delete("/assets/{source}/{asset_id}")
