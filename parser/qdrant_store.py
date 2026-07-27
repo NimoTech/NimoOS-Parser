@@ -295,6 +295,24 @@ class QdrantStore:
             wait=True,
         )
 
+    def scroll_captions(self, source: str, limit: int = 512,
+                        offset: str | None = None) -> tuple[list[dict], str | None]:
+        """按 source 批量导出 caption 文本块(scroll 分页游标写法照抄
+        backfill_mtime.py:65-72)。供 Photos 周期 diff 拉取,存量增量同路径。"""
+        points, next_offset = self.client.scroll(
+            collection_name=self.text_collection,
+            scroll_filter=qm.Filter(must=[
+                qm.FieldCondition(key="root_ids", match=qm.MatchAny(any=[source])),
+                qm.FieldCondition(key="kind", match=qm.MatchValue(value="caption")),
+            ]),
+            with_payload=["file_id", "text", "mtime_ms"],
+            with_vectors=False,
+            limit=limit,
+            offset=offset,
+        )
+        items = [p.payload or {} for p in points]
+        return items, next_offset
+
     def count_vectors(self) -> dict:
         return {
             "text": self.client.count(self.text_collection, exact=False).count,
