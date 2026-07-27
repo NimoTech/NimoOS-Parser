@@ -4,7 +4,7 @@ import logging
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from parser.repo_jobs import enqueue_job
@@ -59,7 +59,11 @@ def ingest(req: IngestReq):
 
 
 @router.get("/captions")
-def export_captions(source: str, limit: int = 512, offset: str | None = None):
+def export_captions(
+    source: str = Query(min_length=1, pattern=r"^[a-z0-9_-]+$"),
+    limit: int = 512,
+    offset: str | None = None,
+):
     """批量导出某 source 下的 caption(scroll 分页游标)。
     供 Photos 周期 diff 拉取(智能时刻策展地基),存量增量同路径:首次全量拉
     完即为存量,之后按 mtime_ms 在 Photos 侧自行做增量判断。"""
@@ -67,6 +71,7 @@ def export_captions(source: str, limit: int = 512, offset: str | None = None):
     if app_state.qstore is None:
         raise HTTPException(503, "qdrant unavailable (qstore not ready)")
     limit = max(1, min(limit, 1024))
+    offset = offset or None  # 契约里 `offset=`(空字符串)等价首页,归一化成 None 再往下传
     prefix = f"{source}:"
     try:
         points, next_offset = app_state.qstore.scroll_captions(

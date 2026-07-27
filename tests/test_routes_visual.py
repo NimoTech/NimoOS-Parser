@@ -160,6 +160,18 @@ def test_captions_export_strips_only_matching_prefix(captions_ctx):
     assert body["items"] == [{"asset_id": "a1", "text": "A dog.", "mtime_ms": 1}]
 
 
+def test_captions_export_empty_offset_normalizes_to_none(captions_ctx):
+    # 契约字面示例 `offset=`(显式空字符串)——FastAPI 绑成 ""而非 None,
+    # handler 需归一化,否则透传给 qdrant scroll 会解析失败被包成 503。
+    client_visual, fake = captions_ctx
+    r = client_visual.get("/v1/parser/visual/captions?source=photos&offset=")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["items"] == [{"asset_id": "a1", "text": "A dog.", "mtime_ms": 1}]
+    assert body["next_offset"] == "cursor2"
+    assert fake.calls[-1] == ("photos", 512, None)
+
+
 def test_captions_export_limit_clamped(captions_ctx):
     client_visual, fake = captions_ctx
     client_visual.get("/v1/parser/visual/captions?source=photos&limit=99999")
