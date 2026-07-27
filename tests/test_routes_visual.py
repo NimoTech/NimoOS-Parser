@@ -180,6 +180,10 @@ def test_captions_export_limit_clamped(captions_ctx):
     assert fake.calls[-1][1] == 1
 
 
-def test_captions_export_qdrant_down_503(client):
+def test_captions_export_qdrant_down_503(client, monkeypatch):
+    # 不依赖 app_state.qstore 的环境默认值(全量 suite 下可能被先跑的测试
+    # 改成非 None 且未清理)——显式 monkeypatch 置 None,自动恢复,消除顺序依赖。
+    from parser.main import app_state
+    monkeypatch.setattr(app_state, "qstore", None)
     r = client.get("/v1/parser/visual/captions?source=photos")
     assert r.status_code == 503
