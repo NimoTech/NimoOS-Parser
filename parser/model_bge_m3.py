@@ -48,6 +48,8 @@ class BGEM3:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+        from parser.memutil import trim_malloc
+        trim_malloc()
 
     def embed_text(self, texts: list[str]) -> list[dict]:
         result = self._model.encode(

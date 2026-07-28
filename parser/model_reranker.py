@@ -44,6 +44,8 @@ class BGEReranker:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+        from parser.memutil import trim_malloc
+        trim_malloc()
 
     def rerank(self, query: str, candidates: list[dict]) -> list[dict]:
         pairs = [[query, c["text"]] for c in candidates]
