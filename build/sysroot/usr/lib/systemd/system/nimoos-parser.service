@@ -13,8 +13,21 @@ Environment=PYTHONPATH=/opt/nimoos-parser
 Environment=PARSER_DISCOVERY_FILE=/var/run/nimoos/parser.url
 Environment=PARSER_BIND_ADDR=127.0.0.1:8283
 Environment=HF_HOME=/opt/nimoos-parser/hf-cache
+# glibc 每线程 arena 会放大 Python/torch 的 RSS 碎片滞留,限 2 个足够
+Environment=MALLOC_ARENA_MAX=2
 ExecStart=/opt/nimoos-parser/venv/bin/python -m uvicorn parser.main:app --host 127.0.0.1 --port 8283
-Restart=on-failure
+# 内存兜底(2026-07-28 全局 OOM 复盘,specs/2026-07-28-memory-management-design.md):
+# parser 常驻 bge-m3/reranker/docling/VLM 四组模型,正常峰值 <8G;
+# MemoryHigh 触顶先由 cgroup 施加回收压力,MemoryMax 硬杀只波及本服务;
+# MemorySwapMax 防止泄漏进程靠 swap 苟活拖垮全机(当时 parser 占了 6.3G swap);
+# Restart=always 保证内存自愈退出(M3)与 cgroup kill 后都能拉起;
+# OOMScoreAdjust=500:万一仍走到内核全局 OOM,优先杀 ML 服务而非 gateway/core。
+MemoryAccounting=yes
+MemoryHigh=8G
+MemoryMax=10G
+MemorySwapMax=2G
+OOMScoreAdjust=500
+Restart=always
 RestartSec=10s
 TimeoutStopSec=30
 LimitNOFILE=65536
