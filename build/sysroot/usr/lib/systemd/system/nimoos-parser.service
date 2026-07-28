@@ -1,8 +1,10 @@
 [Unit]
 Description=NimoOS Parser
 Documentation=https://github.com/NimoTech/NimoOS-Parser
-After=qdrant.service nimoos-wiki.service nimoos-message-bus.service
-Wants=qdrant.service
+# qdrant 以 docker 容器运行(无 qdrant.service),排序锚点是 docker.service;
+# 与 118 现役 unit 对齐,消除"模板 vs 真机"漂移。
+After=docker.service nimoos-wiki.service nimoos-message-bus.service
+Wants=docker.service
 
 [Service]
 Type=notify
@@ -29,6 +31,8 @@ MemorySwapMax=2G
 OOMScoreAdjust=500
 Restart=always
 RestartSec=10s
+# 首装/冷缓存时 HF 模型下载可能远超默认 90s(118 现役值,合入模板防漂移)
+TimeoutStartSec=1800
 TimeoutStopSec=30
 LimitNOFILE=65536
 StandardOutput=journal
