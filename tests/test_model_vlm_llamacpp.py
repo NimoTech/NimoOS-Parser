@@ -199,3 +199,97 @@ def test_load_pipe_uses_mtmd_handler(tmp_path, monkeypatch):
     assert llama.model_path == str(gguf)
     assert llama.n_gpu_layers == 16
     assert pipe is llama
+
+
+class _FakeExitStack:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeMTMDHandlerWithStack:
+    """带 _exit_stack 的 fake(对应 llama-cpp-python 0.3.34 真实结构)。"""
+
+    instances = []
+
+    def __init__(self, clip_model_path):
+        self.clip_model_path = clip_model_path
+        self._exit_stack = _FakeExitStack()
+        type(self).instances.append(self)
+
+
+class _FakeMTMDHandlerNoStack:
+    """无 _exit_stack 的 fake(模拟未来 llama-cpp-python 改私有接口)。"""
+
+    def __init__(self, clip_model_path):
+        self.clip_model_path = clip_model_path
+
+
+class _FakeClosableLlama:
+    instances = []
+
+    def __init__(self, model_path, chat_handler, n_gpu_layers, n_ctx, verbose):
+        self.chat_handler = chat_handler
+        self.close_calls = 0
+        type(self).instances.append(self)
+
+    def create_chat_completion(self, messages, max_tokens=None):
+        return {"choices": [{"message": {"content": "a dog"}}]}
+
+    def close(self):
+        self.close_calls += 1
+
+
+def _fake_module(handler_cls):
+    class _ChatFormat:
+        MTMDChatHandler = handler_cls
+
+    class _Module:
+        llama_chat_format = _ChatFormat
+        Llama = _FakeClosableLlama
+
+    return _Module()
+
+
+def _real_backend(tmp_path, monkeypatch, handler_cls):
+    _FakeClosableLlama.instances.clear()
+    monkeypatch.setitem(sys.modules, "llama_cpp", _fake_module(handler_cls))
+    gguf = tmp_path / "m.gguf"
+    mmproj = tmp_path / "mm.gguf"
+    gguf.write_bytes(b"fake-gguf")
+    mmproj.write_bytes(b"fake-mmproj")
+    return LlamaCppCaptionBackend(gguf_path=gguf, mmproj_path=mmproj,
+                                  backend_tag="cpu")
+
+
+def test_unload_frees_mtmd_context(tmp_path, monkeypatch):
+    """回归 2026-07-28 OOM 主根因:卸载必须关闭 handler 的 _exit_stack
+    (触发 mtmd_free 归还 ~836MB mmproj),并放掉 handler 引用。"""
+    _FakeMTMDHandlerWithStack.instances.clear()
+    b = _real_backend(tmp_path, monkeypatch, _FakeMTMDHandlerWithStack)
+    assert b.caption(b"\xff\xd8fake") == "a dog"
+    handler = _FakeMTMDHandlerWithStack.instances[0]
+    llama = _FakeClosableLlama.instances[0]
+    assert b._chat_handler is handler
+
+    b.unload()
+
+    assert llama.close_calls == 1, "Llama.close() 必须被调用(释放语言模型)"
+    assert handler._exit_stack.closed, "_exit_stack.close() 必须被调用(mtmd_free)"
+    assert b._chat_handler is None
+    assert not b.is_loaded
+    assert b._unload_disabled is False
+
+
+def test_missing_exit_stack_disables_idle_unload(tmp_path, monkeypatch):
+    """llama-cpp-python 私有接口变化时:禁用闲置自动卸载(常驻比每周期
+    泄漏安全),显式 unload 仍可用且不抛。"""
+    b = _real_backend(tmp_path, monkeypatch, _FakeMTMDHandlerNoStack)
+    b.caption(b"x")
+    assert b._unload_disabled is True
+    b._sweep(now=time.monotonic() + 10 ** 6)
+    assert b.is_loaded, "接口缺失时闲置清扫不得卸载"
+    b.unload()
+    assert not b.is_loaded

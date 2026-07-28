@@ -46,6 +46,7 @@ class LlamaCppCaptionBackend(_BaseCaptionBackend):
         self.n_gpu_layers = n_gpu_layers
         self.backend_tag = backend_tag
         self.version = f"{_MODEL_ID}-gguf/{_PROMPT_VERSION}/{backend_tag}"
+        self._chat_handler = None  # 持有引用以便卸载时显式释放 mtmd context
 
     def _load_pipe(self):
         import llama_cpp  # deferred:部署时按平台装 llama-cpp-python,单测不需要
@@ -63,6 +64,15 @@ class LlamaCppCaptionBackend(_BaseCaptionBackend):
         # Qwen3-VL 无专属 handler,走这个通用 mtmd handler(经本机 CPU 冒烟核实)。
         chat_handler = llama_cpp.llama_chat_format.MTMDChatHandler(
             clip_model_path=str(self.mmproj_path))
+        if not hasattr(chat_handler, "_exit_stack"):
+            # llama-cpp-python 私有接口变化,无法显式 free mmproj(mtmd
+            # context)。禁用闲置自动卸载:常驻比"每个卸载周期泄漏 ~836MB"
+            # 安全(2026-07-28 OOM 主根因)。升级该依赖前必须重验此接口,
+            # 见 requirements.txt 的版本 pin 说明。
+            self._unload_disabled = True
+            log.error("MTMDChatHandler lacks _exit_stack; idle auto-unload "
+                      "disabled to avoid mmproj native leak")
+        self._chat_handler = chat_handler
         return llama_cpp.Llama(
             model_path=str(self.gguf_path),
             chat_handler=chat_handler,
@@ -89,3 +99,18 @@ class LlamaCppCaptionBackend(_BaseCaptionBackend):
             max_tokens=128,
         )
         return response["choices"][0]["message"]["content"]
+
+    def _close_pipe(self, pipe) -> None:
+        # llama-cpp-python <=0.3.34:Llama.close() 只释放语言模型自身的
+        # _stack,chat_handler 是普通属性不在释放链上;而 MTMDChatHandler
+        # 没有 close()/__del__,mtmd_free 挂在一个永不关闭的 ExitStack 上
+        # → 不显式关闭就每次重载泄漏整个 mmproj 视觉编码器(~836MB)。
+        try:
+            close = getattr(pipe, "close", None)
+            if close is not None:
+                close()
+        finally:
+            handler, self._chat_handler = self._chat_handler, None
+            stack = getattr(handler, "_exit_stack", None)
+            if stack is not None:
+                stack.close()
