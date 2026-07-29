@@ -11,3 +11,6 @@ build/lib/
 .coverage
 htmlcov/
 parser/_version.py
+
+# workflow scratch reports (session artifacts, never repo content)
+.superpowers*
