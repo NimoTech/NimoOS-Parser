@@ -7,7 +7,7 @@ A single transactional unit:
      - else: set_tombstone (SQLite) + enqueue one reindex job per (root,path)
   3. After commit: best-effort Qdrant tombstone (failures logged, not raised)
 
-Spec: nimo_os_docs/.../2026-05-28-knowledge-files-reindex-design.md §4.2
+Spec: internal spec — knowledge files reindex (2026-05-28) §4.2
 """
 import logging
 import sqlite3
