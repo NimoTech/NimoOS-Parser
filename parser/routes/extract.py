@@ -53,15 +53,25 @@ def extract(body: ExtractRequest) -> dict:
     ext = os.path.splitext(real)[1].lower()
 
     if is_docling_format(ext):
-        markdown = DoclingExtractor.load(ocr=body.ocr).to_markdown(real)
+        from docling.exceptions import ConversionError
+        try:
+            markdown = DoclingExtractor.load(ocr=body.ocr).to_markdown(real)
+        except (ConversionError, RuntimeError) as exc:
+            # Corrupt/legacy files docling (or its LibreOffice fallback)
+            # cannot parse are permanently broken — 4xx tells the caller
+            # (distillation worker) not to retry.
+            raise HTTPException(status_code=422,
+                                detail=f"extraction failed: {exc}")
     elif ext in LEGACY_BINARY_OFFICE_EXTS:
         converted = None
         try:
             from parser.legacy_office_extractor import convert_legacy
             converted = convert_legacy(real)
             markdown = DoclingExtractor.load(ocr=body.ocr).to_markdown(str(converted))
+        except HTTPException:
+            raise
         except Exception as exc:  # legacy conversion / docling failure
-            raise HTTPException(status_code=500,
+            raise HTTPException(status_code=422,
                                 detail=f"extraction failed: {exc}")
         finally:
             if converted is not None:

@@ -36,4 +36,8 @@ pillow>=10
 # 仅 AMD/NVIDIA/GGUF 路线需要(见 parser/model_vlm_llamacpp.py、
 # parser/backendselect.py);import 是 deferred 的,Intel-only 机器不装这个包
 # 也能正常跑 OpenVINO 路线。
-llama-cpp-python>=0.3
+# 精确 pin:parser/model_vlm_llamacpp.py 的泄漏修复依赖其私有属性
+# MTMDChatHandler._exit_stack(该类无公开 close());升级前必须重验
+# tests/test_model_vlm_llamacpp.py::test_unload_frees_mtmd_context 与
+# 真机 RSS 冒烟(specs/2026-07-28-memory-management-design.md §7 M1)。
+llama-cpp-python==0.3.34

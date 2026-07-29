@@ -59,6 +59,9 @@ class _BaseCaptionBackend:
         self._lock = threading.Lock()      # 加载 + 推理单并发
         self._last_used = 0.0
         self._sweeper_started = False
+        # True = 本后端无法安全释放原生资源(如 llama-cpp 私有接口缺失),
+        # 闲置清扫跳过卸载(常驻比"每个卸载周期泄漏"安全);显式 unload 不受影响。
+        self._unload_disabled = False
 
     # -- 可注入点(子类实现) ---------------------------------------------
     def _load_pipe(self):
@@ -76,17 +79,33 @@ class _BaseCaptionBackend:
         with self._lock:
             self._unload_locked()
 
+    def _close_pipe(self, pipe) -> None:
+        """卸载前的原生资源释放钩子(默认无操作)。
+
+        持有 native 句柄的后端(llama.cpp 的 mtmd/mmproj context 等)必须
+        覆盖本方法显式 free——只把 _pipe 置 None 交给 GC 是不够的:
+        2026-07-28 OOM 的主根因就是 mmproj(~836MB)在每个卸载周期泄漏。
+        """
+
     def _unload_locked(self) -> None:
         if self._pipe is not None:
             log.info("unloading idle VLM (ttl=%ss)", self.idle_ttl_s)
+            try:
+                self._close_pipe(self._pipe)
+            except Exception:  # 释放失败不阻断卸载,但必须留痕
+                log.exception("vlm _close_pipe failed (continuing unload)")
             self._pipe = None
             import gc
             gc.collect()
+            from parser.memutil import trim_malloc
+            trim_malloc()
 
     def _sweep(self, now: Optional[float] = None) -> None:
         """空闲清扫;now 参数供测试注入虚拟时钟。"""
         now = time.monotonic() if now is None else now
         with self._lock:
+            if self._unload_disabled:
+                return
             if self._pipe is not None and now - self._last_used > self.idle_ttl_s:
                 self._unload_locked()
 

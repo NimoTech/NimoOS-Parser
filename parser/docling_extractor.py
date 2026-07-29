@@ -90,15 +90,40 @@ class DoclingExtractor:
                 torch.cuda.empty_cache()
         except Exception:
             pass
+        from parser.memutil import trim_malloc
+        trim_malloc()
 
-    def to_markdown(self, source) -> str:
+    def to_markdown(self, source, *, page_range: Optional[tuple] = None,
+                     page_count_out: Optional[dict] = None) -> str:
         """Convert a file path or bytes to markdown.
 
         Accepts either a `pathlib.Path` / str path, or a `DocumentStream`-like
         object for in-memory bytes (used by the sandbox endpoint to avoid
         writing user uploads to disk).
+
+        `page_range`: pass-through to docling's `convert(page_range=...)`
+        (1-indexed, inclusive `(first, last)`). Only the PDF backend honors
+        it — callers are responsible for gating by extension (see
+        `parser/routes/extract.py`), this method just forwards whatever it's
+        given.
+
+        `page_count_out`: optional caller-owned dict; if given, this fills in
+        `page_count_out["total_pages"]` with the source document's *total*
+        page count (`result.input.page_count`, populated regardless of
+        `page_range`) so callers can tell whether a `page_range` cap actually
+        cut anything. This is an out-param rather than a return-value change
+        or instance attribute so existing callers' return type (`str`) is
+        untouched and so nothing is stored on this singleton — it is shared
+        across concurrent threadpool requests (see extract.py), and any
+        instance-attribute would race.
         """
-        result = self._converter.convert(source)
+        kwargs = {}
+        if page_range is not None:
+            kwargs["page_range"] = page_range
+        result = self._converter.convert(source, **kwargs)
+        if page_count_out is not None:
+            page_count_out["total_pages"] = getattr(
+                result.input, "page_count", None)
         return result.document.export_to_markdown()
 
 

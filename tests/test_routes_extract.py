@@ -1,6 +1,12 @@
 import os
 import pytest
 from parser.routes import extract as extract_mod
+from parser.docling_extractor import DoclingExtractor as _DoclingExtractorClass
+
+# Captured at module-import time, before the autouse fixture below patches
+# `DoclingExtractor.load` — lets the corrupt-file tests opt back into the
+# real docling converter to exercise a genuine ConversionError.
+_REAL_DOCLING_LOAD = _DoclingExtractorClass.__dict__["load"]
 
 
 class _FakeDocling:
@@ -65,3 +71,36 @@ def test_extract_plain_text_file(client, monkeypatch, tmp_path):
     r = client.post("/v1/parser/extract", json={"path": str(f)})
     assert r.status_code == 200
     assert r.json()["markdown"] == "hello plain"
+
+
+def test_extract_plain_markdown_file_still_200(client, monkeypatch, tmp_path):
+    # Untouched path: plain .md never goes near docling, so the 422 handling
+    # added for conversion failures must not affect it.
+    monkeypatch.setattr(extract_mod, "EXTRACT_ROOTS", (str(tmp_path),))
+    f = tmp_path / "notes.md"
+    f.write_text("# hello markdown")
+    r = client.post("/v1/parser/extract", json={"path": str(f)})
+    assert r.status_code == 200
+    assert r.json()["markdown"] == "# hello markdown"
+
+
+def test_extract_corrupt_pptx_returns_422(client, monkeypatch, tmp_path):
+    # Opt back into the real docling converter (undoing the autouse mock)
+    # so we exercise a genuine ConversionError on unparseable input.
+    monkeypatch.setattr(extract_mod, "EXTRACT_ROOTS", (str(tmp_path),))
+    monkeypatch.setattr(_DoclingExtractorClass, "load", _REAL_DOCLING_LOAD)
+    f = tmp_path / "corrupt.pptx"
+    f.write_bytes(b"this is not a real pptx file, just garbage bytes" * 5)
+    r = client.post("/v1/parser/extract", json={"path": str(f)})
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("extraction failed")
+
+
+def test_extract_corrupt_docx_returns_422(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(extract_mod, "EXTRACT_ROOTS", (str(tmp_path),))
+    monkeypatch.setattr(_DoclingExtractorClass, "load", _REAL_DOCLING_LOAD)
+    f = tmp_path / "corrupt.docx"
+    f.write_bytes(b"this is not a real docx file, just garbage bytes" * 5)
+    r = client.post("/v1/parser/extract", json={"path": str(f)})
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("extraction failed")
