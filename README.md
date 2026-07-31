@@ -1,25 +1,50 @@
 # NimoOS-Parser
 
-Indexing service for the NimoOS RAG layer. See `nimo_os_docs/docs/superpowers/specs/2026-05-21-rag-vector-db-design.md`.
+Indexing service for the NimoOS RAG layer — parses documents with [docling](https://github.com/DS4SD/docling), embeds them, and writes to the vector store.
 
-## System dependencies
+> ### About
+>
+> NimoOS is a fork of [CasaOS](https://github.com/IceWhaleTech/CasaOS)
+> (Apache-2.0), originally developed by IceWhale Technology Co., Ltd.
+> Building on that foundation, NimoOS adds an AI agent, RAG-based retrieval,
+> a knowledge layer, and a built-in web terminal.
+>
+> See [`NOTICE`](./NOTICE) for attribution details. CasaOS and IceWhale are
+> trademarks of IceWhale Technology Co., Ltd.; NimoOS is an independent
+> project and is not affiliated with IceWhale.
+>
+> This repository is NimoTech's own work and contains no CasaOS-derived code.
 
-The text pipeline shells out to `libreoffice --headless` to convert legacy
-binary office formats (`.doc` / `.ppt` / `.xls` / `.wps`) into modern Open
-XML before feeding them through docling. Without these packages installed,
-files in those formats are recorded but their content is not searchable.
+
+> ⚠️ Multi-user isolation is incomplete — Photos and Search are not yet
+> per-user scoped. Read
+> [SECURITY.md](https://github.com/NimoTech/NimoOS/blob/main/SECURITY.md#known-limitations)
+> before deploying NimoOS for more than one person.
+
+
+## Building
+
+NimoOS is a multi-repository project. Every Go service uses a `replace`
+directive pointing at the local `NimoOS-Common` checkout, so a build needs the
+full workspace — see
+[NimoOS-Build](https://github.com/NimoTech/NimoOS-Build) for the layout and the
+one-line clone helper.
+
+`NimoOS-MessageBus` must be generated first; its generated API code is not
+committed and other services' `go generate` consumes its OpenAPI spec.
 
 ```bash
-sudo apt-get install -y \
-    libreoffice-core libreoffice-writer libreoffice-impress libreoffice-calc
-```
-
-`nimo_os_docs/scripts/install-parser.sh` installs these automatically on
-first run.
-
-## Dev
-```bash
-pip install -r requirements.txt
-python -m uvicorn parser.main:app --host 127.0.0.1 --port 8283
+uv sync   # Python 3.11 (rapidocr-onnxruntime has no 3.12+ wheel)
 pytest
 ```
+
+Go services pin `go 1.21` and echo v4.12 — **do not run `go mod tidy`**.
+
+
+## Documentation
+
+Architecture, request flow and runtime details: [`OVERVIEW.md`](./OVERVIEW.md).
+
+## License
+
+Apache-2.0 — see [`LICENSE`](./LICENSE).

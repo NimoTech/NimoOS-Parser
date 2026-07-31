@@ -132,7 +132,7 @@ def list_files(
 ) -> dict:
     """Return paginated file list matching the filters.
 
-    See nimo_os_docs/.../2026-05-28-knowledge-files-reindex-design.md §4.1.
+    See internal spec — knowledge files reindex (2026-05-28) §4.1.
     """
     if sort not in _SORT_COLUMNS:
         raise ValueError(f"invalid sort: {sort!r}")

@@ -4,7 +4,7 @@ NimoOS RAG 层的**文档索引服务**。当前版本 `1.9.0-alpha1`(见 `parse
 
 绑定 `127.0.0.1:8283`,由 Gateway 转发,API 前缀 `/v1/parser`。
 
-**Python 服务,单独部署**:安装路径 `/opt/nimoos-parser/`,不走 Go 的 `deploy.sh`,使用 `nimo_os_docs/scripts/deploy-parser.sh`。
+**Python 服务,单独部署**:安装路径 `/opt/nimoos-parser/`,不走 Go 的 `deploy.sh`,使用 `scripts/deploy-parser.sh`。
 
 ---
 
@@ -267,7 +267,7 @@ sudo systemctl start nimoos-parser.service
 ### 首次安装
 
 ```bash
-bash nimo_os_docs/scripts/install-parser.sh
+bash scripts/install-parser.sh
 ```
 
 自动完成:创建 venv(uv + Python 3.11)、安装依赖、安装 libreoffice、写 systemd unit、启动服务。
@@ -276,10 +276,10 @@ bash nimo_os_docs/scripts/install-parser.sh
 
 ```bash
 # 代码 + 依赖都更新
-bash nimo_os_docs/scripts/deploy-parser.sh
+bash scripts/deploy-parser.sh
 
 # 只改代码,跳过 pip install(快)
-bash nimo_os_docs/scripts/deploy-parser.sh --no-deps
+bash scripts/deploy-parser.sh --no-deps
 ```
 
 脚本流程:停服务 → rsync 源码 → pip install(可选)→ 启动服务。
@@ -317,6 +317,6 @@ pytest
 
 ## 参考设计文档
 
-- RAG 向量库(索引管线):`nimo_os_docs/docs/superpowers/specs/2026-05-21-rag-vector-db-design.md`
-- file-reader(`/extract` + `/render/pages`):`nimo_os_docs/docs/superpowers/specs/2026-06-23-file-reader-skill-design.md`,运行路径见 `nimo_os_docs/docs/design/file-reader-runtime-path.md`
-- agent 记忆召回(`/agent-memory/*`):`nimo_os_docs/docs/superpowers/specs/2026-06-26-agent-memory-p2-recall-design.md`
+- RAG 向量库(索引管线):内部设计稿 `2026-05-21-rag-vector-db-design.md`
+- file-reader(`/extract` + `/render/pages`):内部设计稿 `2026-06-23-file-reader-skill-design.md`,运行路径见 内部设计稿
+- agent 记忆召回(`/agent-memory/*`):内部设计稿 `2026-06-26-agent-memory-p2-recall-design.md`
