@@ -27,7 +27,7 @@ def test_disallowed_ext_returns_none(conn):
 
 
 def test_delete_event_passes_through_for_any_ext(conn):
-    # delete 任何文件都要 forward 到 parser (用于清向量),allowlist 不查
+    # delete for any file must be forwarded to parser (to clean up vectors); the allowlist isn't checked
     ev = {"op": "delete", "path": "/x.MOV", "is_dir": False}
     assert _op_for_event(ev, conn) == "delete"
 

@@ -1,22 +1,29 @@
-"""caption VLM 多平台自适应的选择大脑。
+"""The selection brain for multi-platform adaptive caption VLM backends.
 
-单机部署的硬件千差万别(Intel 核显/独显、NVIDIA、AMD、纯 CPU),本模块
-负责在启动时探测本机可用的推理路线,打分排序,选出首选后端,并在
-首选加载失败时按打分顺序自动降级——最终兜底永远是 openvino:CPU
-(纯 CPU 推理虽慢但一定能跑,不依赖任何厂商驱动)。
+Single-machine deployments have wildly varying hardware (Intel iGPU/dGPU,
+NVIDIA, AMD, CPU-only). This module probes the inference paths available on
+the local machine at startup, scores and ranks them, picks a preferred
+backend, and automatically demotes down the scored order if the preferred
+backend fails to load - the final fallback is always openvino:CPU (pure CPU
+inference is slow but always works, with no dependency on any vendor driver).
 
-三个探测函数(`_probe_openvino`/`_probe_nvidia`/`_probe_amd`)全部
-best-effort:探测本身依赖的库/命令行工具在很多环境下不存在,任何异常
-都吞掉返回空列表,不能让探测失败拖垮服务启动。
+All three probe functions (`_probe_openvino`/`_probe_nvidia`/`_probe_amd`)
+are best-effort: the libraries/CLI tools they depend on are absent in many
+environments, so any exception is swallowed and an empty list returned -
+a failed probe must never take down service startup.
 
-tier 打分口径:
-- 30 = 独显(dGPU):Intel Arc / NVIDIA 独显
-- 20 = 核显(iGPU)或探测精度不足以区分独显的 AMD(vulkaninfo/rocminfo
-  只能确认"看到 gfx 设备",无法可靠区分独显/核显,统一按 iGPU 打分)
+Tier scoring scheme:
+- 30 = discrete GPU (dGPU): Intel Arc / NVIDIA discrete
+- 20 = integrated GPU (iGPU), or AMD when probe precision can't distinguish
+  discrete from integrated (vulkaninfo/rocminfo can only confirm "a gfx
+  device is visible", not reliably tell dGPU from iGPU, so it's uniformly
+  scored as iGPU)
 - 10 = CPU
 
-tier 相同时按 runtime 优先级:openvino > llamacpp:cuda > llamacpp:vulkan
-> llamacpp:cpu(OpenVINO 对 Intel 生态优化最深,同为独显优先它)。
+When tiers are equal, break the tie by runtime priority: openvino >
+llamacpp:cuda > llamacpp:vulkan > llamacpp:cpu (OpenVINO is the most deeply
+optimized for the Intel ecosystem, so it's preferred among equally-tiered
+discrete GPUs).
 """
 import logging
 import shutil
@@ -28,13 +35,13 @@ from parser.model_vlm_llamacpp import LlamaCppCaptionBackend
 
 log = logging.getLogger("parser.backendselect")
 
-# 探测/子进程调用的超时上限——驱动异常时避免卡死启动流程。
+# Timeout ceiling for probes/subprocess calls - avoids hanging startup on a misbehaving driver.
 _PROBE_TIMEOUT_S = 5
 
-# 兜底候选:任何情况下都必须能跑到的最后一级(纯 CPU 推理)。
+# Fallback candidate: the last-resort tier that must always be reachable (pure CPU inference).
 _FALLBACK_CANDIDATE = {"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}
 
-# runtime(+device)优先级,数字越小越优先;tier 相同时用它打破平局。
+# runtime(+device) priority, lower number = higher priority; used to break ties when tier is equal.
 _RUNTIME_PRIORITY = {
     "openvino": 0,
     ("llamacpp", "cuda"): 1,
@@ -52,11 +59,12 @@ def _priority(candidate: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
-# 硬件探测(best-effort,全部吞异常返回 [])
+# Hardware probing (best-effort, all exceptions swallowed and [] returned)
 # ---------------------------------------------------------------------------
 
 def _probe_openvino() -> list[dict]:
-    """探测 OpenVINO 可见设备:CPU 恒在,GPU.x 按 FULL_DEVICE_NAME 判独显/核显。"""
+    """Probe devices visible to OpenVINO: CPU is always present; GPU.x is
+    classified discrete/integrated via FULL_DEVICE_NAME."""
     try:
         import openvino as ov
 
@@ -81,7 +89,7 @@ def _probe_openvino() -> list[dict]:
 
 
 def _probe_nvidia() -> list[dict]:
-    """探测 NVIDIA GPU:nvidia-smi 存在且能列出至少一张卡。"""
+    """Probe for NVIDIA GPU: nvidia-smi exists and lists at least one card."""
     try:
         if not shutil.which("nvidia-smi"):
             return []
@@ -98,10 +106,12 @@ def _probe_nvidia() -> list[dict]:
 
 
 def _probe_amd() -> list[dict]:
-    """探测 AMD GPU:vulkaninfo/rocminfo 能探到 gfx 设备。
+    """Probe for AMD GPU: vulkaninfo/rocminfo can detect a gfx device.
 
-    vulkaninfo/rocminfo 的输出格式不足以可靠区分独显/核显,统一按
-    iGPU(tier=20)打分——宁可低估,不能让核显被误判为独显抢占优先级。
+    vulkaninfo/rocminfo's output format isn't reliable enough to distinguish
+    discrete from integrated, so it's uniformly scored as iGPU (tier=20) -
+    better to underscore than let an integrated GPU get misjudged as
+    discrete and jump the priority queue.
     """
     try:
         for tool, args in (("vulkaninfo", ["vulkaninfo", "--summary"]),
@@ -119,7 +129,7 @@ def _probe_amd() -> list[dict]:
 
 
 def probe_hardware() -> list[dict]:
-    """合并三路探测的候选列表,不排序(排序见 `rank`)。"""
+    """Merge the candidate lists from all three probes, unsorted (see `rank` for sorting)."""
     candidates: list[dict] = []
     candidates.extend(_probe_openvino())
     candidates.extend(_probe_nvidia())
@@ -128,12 +138,12 @@ def probe_hardware() -> list[dict]:
 
 
 def rank(candidates: list[dict]) -> list[dict]:
-    """按 (tier 降序, runtime 优先级) 排序。"""
+    """Sort by (tier descending, runtime priority)."""
     return sorted(candidates, key=lambda c: (-c["tier"], _priority(c)))
 
 
 # ---------------------------------------------------------------------------
-# 候选 → 后端实例
+# candidate -> backend instance
 # ---------------------------------------------------------------------------
 
 def _candidate_spec(candidate: dict) -> str:
@@ -141,7 +151,7 @@ def _candidate_spec(candidate: dict) -> str:
 
 
 def _is_valid_spec(spec: str) -> bool:
-    """校验显式配置的 `runtime:device` 是否是 build_backend 认识的取值。"""
+    """Validate whether an explicitly configured `runtime:device` is a value build_backend recognizes."""
     if ":" not in spec:
         return False
     runtime, _, device = spec.partition(":")
@@ -154,7 +164,7 @@ def _is_valid_spec(spec: str) -> bool:
 
 def build_backend(spec: str, *, model_path: Path, gguf_path: Path,
                    mmproj_path: Path, idle_ttl_s: int):
-    """把一个 `runtime:device` spec 变成(未加载的)后端实例。"""
+    """Turn a `runtime:device` spec into a (not-yet-loaded) backend instance."""
     runtime, _, device = spec.partition(":")
     if runtime == "openvino":
         return OpenVINOCaptionBackend(
@@ -176,18 +186,19 @@ def build_backend(spec: str, *, model_path: Path, gguf_path: Path,
 
 
 # ---------------------------------------------------------------------------
-# 选择入口 + 回退包装器
+# selection entry point + fallback wrapper
 # ---------------------------------------------------------------------------
 
 def select_caption_backend(*, vlm_device: str, model_path: Path,
                             gguf_path: Path, mmproj_path: Path,
                             idle_ttl_s: int) -> "SelectingCaptionBackend":
-    """按配置选出候选链,返回自带失败降级能力的 `SelectingCaptionBackend`。
+    """Pick a candidate chain per config, and return a `SelectingCaptionBackend`
+    with built-in failure-demotion capability.
 
-    - `vlm_device == "auto"`:探测+打分,取排序结果作为候选链。
-    - 显式 `runtime:device`(如 `llamacpp:cuda`):只有这一个候选
-      (链尾仍会在 `SelectingCaptionBackend` 里自动补 openvino:CPU 兜底)。
-    - 非法值(既不是 auto 也不是认识的 spec):Warn 后按 auto 处理。
+    - `vlm_device == "auto"`: probe + score, and use the ranked result as the candidate chain.
+    - Explicit `runtime:device` (e.g. `llamacpp:cuda`): only this one candidate
+      (the chain's tail still gets an automatic openvino:CPU fallback appended in `SelectingCaptionBackend`).
+    - Invalid value (neither auto nor a recognized spec): warn, then fall back to auto.
     """
     if vlm_device == "auto":
         ranked = rank(probe_hardware())
@@ -196,7 +207,7 @@ def select_caption_backend(*, vlm_device: str, model_path: Path,
         ranked = [{"runtime": runtime, "device": device, "tier": 0,
                    "label": vlm_device}]
     else:
-        log.warning("非法 vlm_device 配置 %r,回退到 auto 硬件探测", vlm_device)
+        log.warning("invalid vlm_device config %r, falling back to auto hardware probe", vlm_device)
         ranked = rank(probe_hardware())
 
     if not ranked:
@@ -208,16 +219,23 @@ def select_caption_backend(*, vlm_device: str, model_path: Path,
 
 
 class SelectingCaptionBackend:
-    """回退包装器:持有按优先级排好序的候选链,对外暴露与具体后端相同
-    的 CaptionBackend 接口(caption/unload/version/is_loaded),对
-    VisualPipeline 等调用方透明。
+    """Fallback wrapper: holds a priority-ordered candidate chain, exposing
+    the same CaptionBackend interface as a concrete backend
+    (caption/unload/version/is_loaded), transparent to callers like
+    VisualPipeline.
 
-    `caption()` 只在当前活跃后端**加载失败**时才按候选链降级——单张图片
-    推理失败/空输出(后端已加载成功,`is_loaded` 为 True)不会触发降级,
-    异常原样抛给调用方,避免健康后端因偶发坏图被永久错误降级到 CPU。
-    降级时重建后端并重试;链尾恒定补齐 openvino:CPU 兜底(纯 CPU 推理,
-    理论上一定能跑),降级到链尾仍失败(且仍是加载失败)则把异常原样抛出。
-    每次降级都记一条 Warn,便于运维定位"为什么用的不是预期后端"。
+    `caption()` only demotes down the candidate chain when the currently
+    active backend **fails to load** - a single image's inference
+    failure/empty output (backend already loaded successfully, `is_loaded`
+    is True) does not trigger demotion; the exception is re-raised to the
+    caller as-is, so a healthy backend doesn't get permanently and wrongly
+    demoted to CPU over an occasional bad image. On demotion, the backend is
+    rebuilt and retried; the chain's tail always has an openvino:CPU fallback
+    appended (pure CPU inference, which should in theory always work) - if
+    it still fails after demoting all the way to the tail (and it's still a
+    load failure), the exception is re-raised as-is. Each demotion logs a
+    warning, so ops can figure out "why isn't this using the expected
+    backend".
     """
 
     def __init__(self, ranked: list[dict], *, model_path: Path,
@@ -243,17 +261,19 @@ class SelectingCaptionBackend:
             mmproj_path=self._mmproj_path, idle_ttl_s=self._idle_ttl_s)
 
     def _demote(self) -> bool:
-        """降级到候选链的下一项;链尾已到头返回 False。
+        """Demote to the next item in the candidate chain; returns False once
+        the chain's tail is reached.
 
-        重建前先显式 `.unload()` 旧后端(照 `_BaseCaptionBackend._unload_locked`
-        的范式),不依赖 GC 隐式回收 GB 级原生对象。
+        Explicitly `.unload()`s the old backend before rebuilding (following
+        the `_BaseCaptionBackend._unload_locked` pattern), rather than
+        relying on GC to implicitly reclaim GB-scale native objects.
         """
         if self._index + 1 >= len(self._ranked):
             return False
         self._backend.unload()
         self._index += 1
         candidate = self._ranked[self._index]
-        log.warning("VLM 后端降级:切换到 %s(%s)",
+        log.warning("VLM backend demoted: switching to %s (%s)",
                     _candidate_spec(candidate), candidate.get("label", ""))
         self._backend = self._build(self._index)
         return True
@@ -263,13 +283,16 @@ class SelectingCaptionBackend:
             try:
                 return self._backend.caption(image_bytes)
             except CaptionError:
-                # 判定必须在异常发生后读取 is_loaded,不能用调用前采样的
-                # 快照——冷启动首帧场景下,调用前 is_loaded=False,但本次
-                # 调用内 `_load_pipe` 可能已经成功(`_pipe` 落地),随后
-                # `_infer` 才失败;此时异常后读到的 is_loaded 才是真实值。
-                # 加载失败(_pipe 保持 None,is_loaded 仍为 False)才降级;
-                # 已加载后端的单次推理失败/空输出(is_loaded 为 True)不
-                # 改变后端选择,异常原样抛给调用方。
+                # is_loaded must be read after the exception occurs, not from a
+                # snapshot sampled before the call - on a cold-start first
+                # frame, is_loaded=False before the call, but `_load_pipe`
+                # inside this call may already have succeeded (`_pipe` set),
+                # with `_infer` failing afterward; only the post-exception
+                # is_loaded reflects the real state. Only demote on a load
+                # failure (_pipe stays None, is_loaded still False); a single
+                # inference failure/empty output on an already-loaded backend
+                # (is_loaded is True) doesn't change backend selection, the
+                # exception is re-raised to the caller as-is.
                 if self._backend.is_loaded or not self._demote():
                     raise
 

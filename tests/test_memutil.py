@@ -1,9 +1,9 @@
-"""memutil.trim_malloc:尽力而为的 glibc 归还,任何环境下都不许抛异常。"""
+"""memutil.trim_malloc: best-effort glibc page return, must never raise in any environment."""
 import parser.memutil as memutil
 
 
 def test_trim_malloc_returns_bool():
-    # glibc 环境 True;非 glibc(musl)静默 False——两者都合法,但不能抛。
+    # True on glibc environments; silently False on non-glibc (musl) - both are valid, but it must never raise.
     assert memutil.trim_malloc() in (True, False)
 
 

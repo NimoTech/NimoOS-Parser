@@ -11,7 +11,7 @@ from parser.workers import WorkerPool
 
 
 class SlowPipeline:
-    """每个 job 拖 0.1s, 模拟真实工作"""
+    """Each job takes 0.1s, simulating real work"""
     def __init__(self):
         self.indexed: list[str] = []
 
@@ -35,7 +35,7 @@ def no_pacing(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_scale_down_finishes_in_flight_job_cleanly(conn: sqlite3.Connection):
-    """缩容时,正在跑的 job 必须走完 complete_job 写库,不应残留 in-flight"""
+    """When scaling down, an in-flight job must run through complete_job to write to the DB; it must not be left dangling in-flight"""
     pipeline = SlowPipeline()
     pool = WorkerPool(conn, text_pipeline=pipeline, concurrency=2,
                      lease_s=60, max_attempts=5, idle_sleep_s=0.02)
@@ -44,14 +44,14 @@ async def test_scale_down_finishes_in_flight_job_cleanly(conn: sqlite3.Connectio
     for i in range(4):
         enqueue_job(conn, root_id="r", path=f"/a{i}.md", op="index",
                     priority=100, now_ms=now)
-    # 让 workers 抓到 job
+    # let the workers pick up the jobs
     await asyncio.sleep(0.05)
     await pool.set_concurrency(1)
-    # 等所有 job 跑完
+    # wait for all jobs to finish
     await asyncio.sleep(1.0)
-    # 缩容后只有 1 个 worker,4 个 job 串行需要至少 4 * 0.1s = 0.4s
+    # after scaling down there's only 1 worker; running 4 jobs serially needs at least 4 * 0.1s = 0.4s
     assert len(pipeline.indexed) == 4
-    # 所有 job 都标记 done(没有 in-flight 残留)
+    # all jobs are marked done (no in-flight leftovers)
     assert list_jobs(conn, status="running", limit=10) == []
     assert list_jobs(conn, status="pending", limit=10) == []
     await pool.stop()
@@ -69,7 +69,7 @@ async def test_scale_up_adds_workers(conn: sqlite3.Connection):
                     priority=100, now_ms=now)
     await asyncio.sleep(0.05)
     await pool.set_concurrency(4)
-    # 4 workers 并行 ~0.1s 一轮,vs 1 worker 串行 0.4s
+    # 4 workers running in parallel take ~0.1s per round, vs. 0.4s serial with 1 worker
     await asyncio.sleep(0.5)
     assert len(pipeline.indexed) == 4
     await pool.stop()
@@ -77,18 +77,18 @@ async def test_scale_up_adds_workers(conn: sqlite3.Connection):
 
 @pytest.mark.asyncio
 async def test_scale_down_returns_immediately_does_not_block(conn: sqlite3.Connection):
-    """set_concurrency 必须立即返回,不等 drain"""
+    """set_concurrency must return immediately, without waiting for drain"""
     pipeline = SlowPipeline()
     pool = WorkerPool(conn, text_pipeline=pipeline, concurrency=2,
                      lease_s=60, max_attempts=5, idle_sleep_s=0.02)
     await pool.start()
     now = int(time.time() * 1000)
     enqueue_job(conn, root_id="r", path="/a.md", op="index", priority=100, now_ms=now)
-    await asyncio.sleep(0.02)  # worker 抓到 job 开始跑
+    await asyncio.sleep(0.02)  # worker picks up the job and starts running it
     t0 = time.perf_counter()
     await pool.set_concurrency(1)
     dt = time.perf_counter() - t0
-    # 即使有正在跑的 job(~0.1s 完成),set_concurrency 也应在 ~10ms 内返回
+    # even with a job in flight (~0.1s to complete), set_concurrency should return within ~10ms
     assert dt < 0.1, f"set_concurrency blocked {dt*1000:.1f}ms; should be fire-and-forget within 100ms"
     await asyncio.sleep(0.3)
     await pool.stop()

@@ -1,4 +1,4 @@
-"""knowledge_notes collection 的 upsert/query/delete 单测(fake client)。"""
+"""Unit tests for the knowledge_notes collection's upsert/query/delete (fake client)."""
 import types
 
 from parser.qdrant_store import QdrantStore, KNOWLEDGE_NOTES_COLLECTION
@@ -29,7 +29,7 @@ class _FakeClient:
 
 
 def _store():
-    s = QdrantStore.__new__(QdrantStore)   # 跳过真实连接
+    s = QdrantStore.__new__(QdrantStore)   # skip the real connection
     s.client = _FakeClient()
     s.text_collection = "text_chunks"
     s.visual_collection = "visual_chunks"

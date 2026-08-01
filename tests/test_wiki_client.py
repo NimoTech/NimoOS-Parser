@@ -48,8 +48,8 @@ async def test_wiki_client_rereads_discovery_on_connect_error(tmp_path, monkeypa
     from parser.wiki_client import WikiClient
 
     url_file = tmp_path / "wiki.url"
-    url_file.write_text("http://127.0.0.1:59999")  # 新地址
-    c = WikiClient("http://127.0.0.1:59998",       # 旧地址(已死)
+    url_file.write_text("http://127.0.0.1:59999")  # new address
+    c = WikiClient("http://127.0.0.1:59998",       # old address (dead)
                    discovery_path=str(url_file))
 
     calls = []

@@ -1,9 +1,10 @@
-"""backendselect.py 的硬件探测/打分/工厂/回退包装器测试。
+"""Tests for backendselect.py's hardware probing/scoring/factory/fallback wrapper.
 
-三个探测函数(_probe_openvino/_probe_nvidia/_probe_amd)全部 monkeypatch
-替身,不依赖真实硬件/驱动;build_backend/select_caption_backend 只构造
-后端实例(懒加载,构造阶段不 import openvino/llama_cpp),因此本机没装
-这两个可选依赖也能跑通。
+All three probe functions (_probe_openvino/_probe_nvidia/_probe_amd) are
+monkeypatched with doubles, so this doesn't depend on real hardware/drivers;
+build_backend/select_caption_backend only construct backend instances
+(lazy-loaded, openvino/llama_cpp aren't imported at construction time), so
+this still passes even without these two optional deps installed locally.
 """
 import logging
 
@@ -27,7 +28,7 @@ def test_intel_dgpu_selected(monkeypatch):
 
 
 def test_intel_arc_beats_nvidia_when_tied(monkeypatch):
-    # Intel Arc dGPU(30) 与 NVIDIA dGPU(30) 并存 → 同 tier,openvino 优先
+    # Intel Arc dGPU (30) and NVIDIA dGPU (30) both present -> same tier, openvino wins
     monkeypatch.setattr(bs, "_probe_openvino",
         lambda: [{"runtime": "openvino", "device": "GPU.0", "tier": 30, "label": "Arc B60"},
                  {"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}])
@@ -39,7 +40,7 @@ def test_intel_arc_beats_nvidia_when_tied(monkeypatch):
 
 
 def test_amd_only_picks_vulkan(monkeypatch):
-    # openvino 只探到 CPU(10),AMD 探到 gfx → llamacpp:vulkan(iGPU 20) 胜出
+    # openvino only detects CPU (10), AMD detects gfx -> llamacpp:vulkan (iGPU 20) wins
     monkeypatch.setattr(bs, "_probe_openvino",
         lambda: [{"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}])
     monkeypatch.setattr(bs, "_probe_nvidia", lambda: [])
@@ -59,7 +60,7 @@ def test_no_gpu_falls_to_openvino_cpu(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# select_caption_backend(显式指定 / 非法值回退)
+# select_caption_backend (explicit spec / fallback on invalid value)
 # ---------------------------------------------------------------------------
 
 def test_explicit_device_respected(tmp_path):
@@ -92,15 +93,15 @@ def test_illegal_device_falls_to_auto(monkeypatch, tmp_path, caplog):
     assert isinstance(b, bs.SelectingCaptionBackend)
     assert type(b._backend).__name__ == "OpenVINOCaptionBackend"
     assert b._backend.device == "CPU"
-    assert len(caplog.records) >= 1  # 非法值必须 Warn
+    assert len(caplog.records) >= 1  # an invalid value must warn
 
 
 # ---------------------------------------------------------------------------
-# SelectingCaptionBackend 回退包装器
+# SelectingCaptionBackend fallback wrapper
 # ---------------------------------------------------------------------------
 
 def test_selecting_backend_fallback(monkeypatch, tmp_path, caplog):
-    """首选候选加载即抛 CaptionError → 降级到下一候选并重试成功。"""
+    """Preferred candidate raises CaptionError on load -> demotes to the next candidate and retries successfully."""
 
     class _Bad:
         def __init__(self):
@@ -161,18 +162,19 @@ def test_selecting_backend_fallback(monkeypatch, tmp_path, caplog):
     assert out == "a good caption"
     assert built[0] == "openvino:GPU.1"
     assert built[1] == "llamacpp:cuda"
-    assert len(caplog.records) >= 1  # 降级必须 Warn
+    assert len(caplog.records) >= 1  # demotion must warn
     assert wrapper.version == "good/backend"
     assert wrapper.is_loaded is True
-    assert bad_instances[0].unloaded is True  # _demote 必须先 unload 旧后端再重建
+    assert bad_instances[0].unloaded is True  # _demote must unload the old backend before rebuilding
 
 
 def test_selecting_backend_no_demote_on_inference_failure(monkeypatch, tmp_path, caplog):
-    """已加载后端单次推理失败(坏图)不应触发降级,异常原样抛出。"""
+    """A single inference failure (bad image) on an already-loaded backend should not trigger demotion; the exception is re-raised as-is."""
 
     class _LoadsThenBadImage:
-        """模拟 is_loaded False→True 变化:首次调用加载成功并返回结果,
-        之后(已加载状态下)推理失败,抛出 CaptionError。"""
+        """Simulates is_loaded going False->True: the first call loads
+        successfully and returns a result, then (once loaded) inference
+        fails and raises CaptionError."""
 
         def __init__(self):
             self._loaded = False
@@ -205,7 +207,7 @@ def test_selecting_backend_no_demote_on_inference_failure(monkeypatch, tmp_path,
 
     monkeypatch.setattr(bs, "build_backend", fake_build_backend)
 
-    # 链上还有下一个候选可供降级——如果错误地降级,测试也能捕获到。
+    # There's still a next candidate in the chain available for demotion - if it wrongly demotes, the test will catch it.
     ranked = [
         {"runtime": "openvino", "device": "GPU.1", "tier": 30, "label": "arc"},
         {"runtime": "llamacpp", "device": "cuda", "tier": 30, "label": "other"},
@@ -218,35 +220,39 @@ def test_selecting_backend_no_demote_on_inference_failure(monkeypatch, tmp_path,
         idle_ttl_s=60,
     )
 
-    # 第一次调用:加载成功并返回结果。
+    # First call: loads successfully and returns a result.
     out = wrapper.caption(b"good-image")
     assert out == "first good caption"
     assert stub.is_loaded is True
 
-    # 第二次调用:后端已加载,这次是单张坏图推理失败——不应降级。
+    # Second call: backend is already loaded, this time a single bad image fails inference - should not demote.
     with caplog.at_level(logging.WARNING, logger="parser.backendselect"):
         with pytest.raises(bs.CaptionError):
             wrapper.caption(b"bad-image")
 
-    assert built == ["openvino:GPU.1"]  # 只构建过一次,未曾降级重建
-    assert stub.unloaded is False       # 未被 _demote 卸载
-    assert wrapper._backend is stub     # 活跃后端未变
-    assert wrapper._index == 0          # 候选链索引未变
-    assert not any("降级" in r.getMessage() for r in caplog.records)  # 无降级 Warn
+    assert built == ["openvino:GPU.1"]  # only built once, never demoted/rebuilt
+    assert stub.unloaded is False       # not unloaded by _demote
+    assert wrapper._backend is stub     # active backend unchanged
+    assert wrapper._index == 0          # candidate chain index unchanged
+    assert not any("demoted" in r.getMessage() for r in caplog.records)  # no demotion warning
 
 
 def test_selecting_backend_no_demote_on_cold_start_first_frame_failure(
         monkeypatch, tmp_path, caplog):
-    """冷启动首帧场景:调用前 is_loaded 为 False(TTL 卸载后的窗口),但
-    本次 caption() 调用内部先加载成功(模拟 `_load_pipe` 落地)、随后才对
-    这张图推理失败(模拟 `_infer` 失败)——真实状态是"加载没问题,只是
-    这张图坏",不能因为调用前采样的快照是 False 就误判成"加载失败"进而
-    触发降级。判定必须在异常抛出后再读 is_loaded,而不是用调用前的快照。
+    """Cold-start first-frame scenario: is_loaded is False before the call
+    (the window right after a TTL unload), but inside this caption() call it
+    first loads successfully (simulating `_load_pipe` landing), and only
+    afterward fails inference on this image (simulating `_infer` failing) -
+    the real state is "loading was fine, just this image is bad"; it must
+    not be misjudged as a "load failure" (and thus demoted) just because the
+    snapshot taken before the call was False. The check must read is_loaded
+    after the exception is raised, not from the pre-call snapshot.
     """
 
     class _LoadsThenFailsWithinSameCall:
-        """同一次 caption() 调用内:先把内部 loaded 标志置 True(模拟
-        `_load_pipe` 成功),再抛 CaptionError(模拟 `_infer` 失败)。"""
+        """Within a single caption() call: first flips the internal loaded
+        flag to True (simulating `_load_pipe` succeeding), then raises
+        CaptionError (simulating `_infer` failing)."""
 
         def __init__(self):
             self._loaded = False
@@ -257,8 +263,8 @@ def test_selecting_backend_no_demote_on_cold_start_first_frame_failure(
             return self._loaded
 
         def caption(self, image_bytes):
-            self._loaded = True  # 模拟 _load_pipe 在本次调用内已经成功落地
-            # 紧接着模拟 _infer 对这张(坏)图推理失败
+            self._loaded = True  # simulates _load_pipe having already succeeded within this call
+            # then simulates _infer failing inference on this (bad) image
             raise bs.CaptionError("simulated infer failure right after cold load")
 
         def unload(self):
@@ -288,14 +294,14 @@ def test_selecting_backend_no_demote_on_cold_start_first_frame_failure(
         idle_ttl_s=60,
     )
 
-    assert wrapper.is_loaded is False  # 调用前尚未加载——冷启动首帧的前提条件
+    assert wrapper.is_loaded is False  # not yet loaded before the call - the precondition for a cold-start first frame
 
     with caplog.at_level(logging.WARNING, logger="parser.backendselect"):
         with pytest.raises(bs.CaptionError):
             wrapper.caption(b"bad-image-right-after-cold-load")
 
-    assert built == ["openvino:GPU.1"]  # 只构建过一次,未曾降级重建
-    assert stub.unloaded is False       # 未被 _demote 卸载
-    assert wrapper._backend is stub     # 活跃后端未变
-    assert wrapper._index == 0          # 候选链索引未变
-    assert not any("降级" in r.getMessage() for r in caplog.records)  # 无降级 Warn
+    assert built == ["openvino:GPU.1"]  # only built once, never demoted/rebuilt
+    assert stub.unloaded is False       # not unloaded by _demote
+    assert wrapper._backend is stub     # active backend unchanged
+    assert wrapper._index == 0          # candidate chain index unchanged
+    assert not any("demoted" in r.getMessage() for r in caplog.records)  # no demotion warning

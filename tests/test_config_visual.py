@@ -25,7 +25,7 @@ def test_visual_conf_override(tmp_path):
 
 
 def test_vlm_multiplatform_defaults():
-    """backendselect 多平台自适应:设备选择开关 + GGUF 权重路径默认值。"""
+    """backendselect multi-platform adaptation: device-selection toggle + GGUF weight path defaults."""
     s = Settings()
     assert s.vlm_device == "auto"
     assert s.vlm_gguf_model == Path(

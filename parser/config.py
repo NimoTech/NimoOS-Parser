@@ -28,19 +28,19 @@ class Settings:
     parser_version: str = PARSER_VERSION
     bind_host: str = "127.0.0.1"
     bind_port: int = 8283
-    # visual pipeline:VLM 模型权重目录(懒加载,空闲超时后卸载释放显存/内存)
+    # visual pipeline: VLM model weights dir (lazy-loaded, unloaded after idle timeout to free VRAM/RAM)
     vlm_model_path: Path = Path("/opt/nimoos-parser/models/qwen3-vl-4b-int4")
-    # visual pipeline:VLM 模型空闲多久(秒)后自动卸载
+    # visual pipeline: how long (seconds) the VLM model can sit idle before auto-unload
     vlm_idle_ttl_s: int = 300
-    # visual pipeline:允许喂给 VLM 的目录白名单(逗号分隔),防止越权读取任意路径
+    # visual pipeline: allowlisted dirs (comma-separated) the VLM may be fed, to prevent reading arbitrary paths
     visual_allowed_dirs: str = "/DATA/.system_data/photos/thumbs"
-    # visual pipeline:caption 后端选择——"auto" 走 backendselect 硬件探测打分,
-    # 也可显式指定 "runtime:device"(如 "llamacpp:cuda"/"openvino:GPU.0")跳过探测
+    # visual pipeline: caption backend selection - "auto" runs backendselect's hardware
+    # probe/scoring; can also explicitly set "runtime:device" (e.g. "llamacpp:cuda"/"openvino:GPU.0") to skip probing
     vlm_device: str = "auto"
-    # visual pipeline:GGUF 路线(AMD/NVIDIA,经 llama.cpp 推理)的量化权重文件
+    # visual pipeline: quantized weight file for the GGUF path (AMD/NVIDIA, inference via llama.cpp)
     vlm_gguf_model: Path = Path(
         "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/model.gguf")
-    # visual pipeline:GGUF 路线的多模态投影权重文件(与 vlm_gguf_model 配套)
+    # visual pipeline: multimodal projector weight file for the GGUF path (paired with vlm_gguf_model)
     vlm_gguf_mmproj: Path = Path(
         "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/mmproj.gguf")
 

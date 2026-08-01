@@ -4,19 +4,19 @@ from parser import pacing
 
 
 @pytest.mark.parametrize("mode,ratio,expected", [
-    # 全力档:永远 0
+    # max-performance tier: always 0
     (4, 0.0, 0.0), (4, 1.0, 0.0), (4, 5.0, 0.0),
-    # 平衡档:knee 以下 = base
+    # balanced tier: below knee = base
     (2, 0.0, 1.0), (2, 0.7, 1.0),
-    # 平衡档:放大 4^((ratio-0.7)/0.3)
+    # balanced tier: scales as 4^((ratio-0.7)/0.3)
     (2, 1.0, 4.0),          # 4^1
     (2, 1.3, 16.0),         # 4^2
-    (2, 2.0, 30.0),         # 超 cap → 30
-    # 省电档
+    (2, 2.0, 30.0),         # over cap -> 30
+    # power-saving tier
     (1, 0.5, 5.0),
     (1, 1.0, 20.0),         # 5 * 4^1
     (1, 3.0, 60.0),         # cap
-    # 未知档位按平衡处理
+    # unknown tier treated as balanced
     (3, 0.0, 1.0),
 ])
 def test_sleep_seconds_table(mode, ratio, expected):

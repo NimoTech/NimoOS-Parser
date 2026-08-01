@@ -5,8 +5,9 @@ import pytest
 
 @pytest.fixture
 def captions_ctx(tmp_path):
-    # 照 test_routes_files_reindex.py 的 FakeQstore 注入惯例:先建 conn/qstore
-    # 再 create_app,skip_workers 模式不碰 app_state.qstore,测试全程可控。
+    # Following test_routes_files_reindex.py's FakeQstore injection convention:
+    # build conn/qstore first, then create_app; skip_workers mode never
+    # touches app_state.qstore, so the test stays fully in control throughout.
     from parser.main import app_state, create_app
     from parser.db import init_db
     from fastapi.testclient import TestClient
@@ -102,8 +103,9 @@ def test_delete_without_pipeline_503(client):
 
 
 def test_delete_qdrant_midflight_failure_503(client):
-    # Qdrant 启动后中途瞬断:delete_asset 抛异常应被包成 503(可重试语义),
-    # 而不是裸 500 打穿。
+    # Qdrant went down transiently after startup: delete_asset raising an
+    # exception should be wrapped as a 503 (retryable semantics), not
+    # propagate as a raw 500.
     from parser.main import app_state
 
     class _BrokenPipeline:
@@ -136,7 +138,7 @@ def test_captions_export_basic(captions_ctx):
     assert body2["items"][0]["asset_id"] == "a2"
     assert body2["next_offset"] is None
 
-    # scroll_captions 收到的 limit/offset 与 query 参数一致透传
+    # the limit/offset scroll_captions receives passes through unchanged from the query params
     assert fake.calls[0] == ("photos", 512, None)
     assert fake.calls[1] == ("photos", 512, "cursor2")
 
@@ -161,8 +163,9 @@ def test_captions_export_strips_only_matching_prefix(captions_ctx):
 
 
 def test_captions_export_empty_offset_normalizes_to_none(captions_ctx):
-    # 契约字面示例 `offset=`(显式空字符串)——FastAPI 绑成 ""而非 None,
-    # handler 需归一化,否则透传给 qdrant scroll 会解析失败被包成 503。
+    # A literal contract example, `offset=` (an explicit empty string) - FastAPI
+    # binds it to "" rather than None, so the handler must normalize it,
+    # otherwise passing it through to qdrant scroll fails to parse and gets wrapped as a 503.
     client_visual, fake = captions_ctx
     r = client_visual.get("/v1/parser/visual/captions?source=photos&offset=")
     assert r.status_code == 200
@@ -181,8 +184,9 @@ def test_captions_export_limit_clamped(captions_ctx):
 
 
 def test_captions_export_qdrant_down_503(client, monkeypatch):
-    # 不依赖 app_state.qstore 的环境默认值(全量 suite 下可能被先跑的测试
-    # 改成非 None 且未清理)——显式 monkeypatch 置 None,自动恢复,消除顺序依赖。
+    # Don't rely on app_state.qstore's environment default (under the full
+    # suite, an earlier-run test may have set it to non-None and left it
+    # uncleaned) - explicitly monkeypatch it to None, auto-restored, to eliminate ordering dependence.
     from parser.main import app_state
     monkeypatch.setattr(app_state, "qstore", None)
     r = client.get("/v1/parser/visual/captions?source=photos")

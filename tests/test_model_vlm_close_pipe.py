@@ -1,8 +1,9 @@
-"""_close_pipe 钩子与 _unload_disabled(2026-07-28 mmproj 泄漏 OOM 回归防线)。
+"""_close_pipe hook and _unload_disabled (regression guard for the 2026-07-28 mmproj leak OOM).
 
-卸载必须走 _close_pipe 显式释放原生资源;当后端声明无法安全释放时
-(_unload_disabled),闲置清扫不得卸载(常驻比每周期泄漏安全),
-但显式 unload()(降级/运维)仍然生效。
+Unload must go through _close_pipe to explicitly release native resources;
+when a backend has declared it cannot safely release them (_unload_disabled),
+idle sweep must not unload (staying resident is safer than leaking every
+cycle), but an explicit unload() (demotion/ops) still takes effect.
 """
 import time
 
@@ -38,8 +39,8 @@ def test_sweep_respects_unload_disabled_but_explicit_unload_works():
     b.caption(b"x")
     b._unload_disabled = True
     b._sweep(now=time.monotonic() + 999)
-    assert b.is_loaded, "禁用后闲置清扫不得卸载"
-    b.unload()          # 显式卸载(降级/运维)不受禁用影响
+    assert b.is_loaded, "idle sweep must not unload once disabled"
+    b.unload()          # explicit unload (demotion/ops) is unaffected by the disable flag
     assert not b.is_loaded
 
 

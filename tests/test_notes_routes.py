@@ -1,4 +1,4 @@
-"""notes 路由三端点:embed 与 qstore 全部打桩,验证契约与隔离参数。"""
+"""The three notes routes: embed and qstore are all stubbed, verifying the contract and isolation params."""
 import pytest
 from fastapi.testclient import TestClient
 
@@ -47,7 +47,7 @@ def test_upsert_deletes_stale_then_inserts(client):
                    {"chunk_no": 1, "text": "world"}],
     })
     assert r.status_code == 200 and r.json()["upserted"] == 2
-    assert fake.deleted == [("1", "n1")]          # 先删旧
+    assert fake.deleted == [("1", "n1")]          # delete the old one first
     assert len(fake.upserted) == 2
     pl = fake.upserted[0]["payload"]
     assert pl["user_id"] == "1" and pl["note_id"] == "n1"
@@ -97,4 +97,4 @@ def test_upsert_point_ids_are_user_scoped(client):
     c.post("/v1/parser/notes/upsert", json={**body, "user_id": "1"})
     c.post("/v1/parser/notes/upsert", json={**body, "user_id": "2"})
     ids = [p["id"] for p in fake.upserted]
-    assert len(ids) == 2 and ids[0] != ids[1]   # 不同用户同 note_id 绝不共享 point id
+    assert len(ids) == 2 and ids[0] != ids[1]   # different users with the same note_id must never share a point id

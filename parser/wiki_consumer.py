@@ -9,8 +9,8 @@ from parser.repo_models import get_wiki_cursor, set_wiki_cursor
 
 log = logging.getLogger("parser.wiki_consumer")
 
-# 文本类白名单:有正式 text pipeline 支持的扩展。
-# MOV/MP4/JPG 等视觉类等 visual pipeline 上线后再开。
+# Text-type allowlist: extensions formally supported by the text pipeline.
+# Visual types like MOV/MP4/JPG will be enabled once the visual pipeline ships.
 TEXT_EXT_ALLOWLIST = {
     # raw text + markdown — plain reader
     ".md", ".txt", ".rst",
@@ -43,7 +43,7 @@ def _op_for_event(ev: dict, conn: sqlite3.Connection) -> str | None:
         return None
     op = ev.get("op")
     if op == "delete":
-        # delete 任何路径都转发(让 parser 清掉可能存在的旧向量)
+        # forward delete for any path (lets parser clean up any old vectors that may exist)
         return "delete"
     if op in ("create", "modify", "rename"):
         if not _is_text_indexable(conn, ev.get("root_id", ""),

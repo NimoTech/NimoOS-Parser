@@ -6,38 +6,40 @@ pydantic>=2.7
 sdnotify>=0.3
 python-multipart>=0.0.20
 
-# ---- 向量库 / embedding / reranker ----
+# ---- vector store / embedding / reranker ----
 qdrant-client[fastembed]>=1.10
 FlagEmbedding>=1.2.10
 
-# ---- 文档转换 (PDF / DOCX / PPTX / XLSX / HTML) ----
-# docling 会把 torch / torchvision / transformers 作为传递依赖拉进来。
-# GPU 用户:如需 CUDA 版 torch,请单独跑 `pip install --index-url <pytorch-cuda-wheel> torch torchvision`
-# 再装 docling,顺序无所谓但 GPU wheel 要先就位。
+# ---- document conversion (PDF / DOCX / PPTX / XLSX / HTML) ----
+# docling pulls in torch / torchvision / transformers as transitive deps.
+# GPU users: if you need the CUDA build of torch, run
+# `pip install --index-url <pytorch-cuda-wheel> torch torchvision` separately
+# before installing docling; order doesn't matter but the GPU wheel must be in place first.
 docling>=2.50
 
-# ---- OCR(扫描件 / 图片型 PDF)----
-# 当前 CPU only;wheel 自带 3 个 ONNX 模型,离线可用。
-# GPU OCR 需要 onnxruntime-gpu,但 CUDA 13.2 还没对应 wheel,等 ort 1.21+。
+# ---- OCR (scanned docs / image-based PDFs) ----
+# CPU only for now; the wheel bundles 3 ONNX models and works offline.
+# GPU OCR needs onnxruntime-gpu, but there's no wheel for CUDA 13.2 yet; waiting on ort 1.21+.
 rapidocr-onnxruntime>=1.4
 
-# ---- 测试 ----
+# ---- tests ----
 pytest>=8.0
 pytest-asyncio>=0.24
 pytest-httpx>=0.30
 
-# ---- visual pipeline(照片 caption,Qwen3-VL OpenVINO 推理)----
-# 转换期依赖(optimum-intel 等)不在此列,见 scripts/vlm/convert_qwen3vl.sh。
+# ---- visual pipeline (photo captions, Qwen3-VL OpenVINO inference) ----
+# Conversion-time deps (optimum-intel etc.) are not listed here, see scripts/vlm/convert_qwen3vl.sh.
 openvino>=2026.1
 openvino-genai>=2026.1
 pillow>=10
 
-# ---- visual pipeline(照片 caption,GGUF + llama.cpp 推理,多平台自适应备选)----
-# 仅 AMD/NVIDIA/GGUF 路线需要(见 parser/model_vlm_llamacpp.py、
-# parser/backendselect.py);import 是 deferred 的,Intel-only 机器不装这个包
-# 也能正常跑 OpenVINO 路线。
-# 精确 pin:parser/model_vlm_llamacpp.py 的泄漏修复依赖其私有属性
-# MTMDChatHandler._exit_stack(该类无公开 close());升级前必须重验
-# tests/test_model_vlm_llamacpp.py::test_unload_frees_mtmd_context 与
-# 真机 RSS 冒烟(specs/2026-07-28-memory-management-design.md §7 M1)。
+# ---- visual pipeline (photo captions, GGUF + llama.cpp inference, multi-platform adaptive fallback) ----
+# Only needed for the AMD/NVIDIA/GGUF path (see parser/model_vlm_llamacpp.py,
+# parser/backendselect.py); the import is deferred, so Intel-only machines can
+# skip this package and still run the OpenVINO path fine.
+# Pinned exactly: the leak fix in parser/model_vlm_llamacpp.py relies on the
+# private attribute MTMDChatHandler._exit_stack (that class has no public
+# close()); re-verify tests/test_model_vlm_llamacpp.py::test_unload_frees_mtmd_context
+# and a real-machine RSS smoke test before upgrading
+# (specs/2026-07-28-memory-management-design.md §7 M1).
 llama-cpp-python==0.3.34

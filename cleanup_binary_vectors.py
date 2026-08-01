@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-cleanup_binary_vectors.py — 清掉历史污染的 binary 文件向量
+cleanup_binary_vectors.py - clean up vectors from historically polluted binary files
 
-背景:wiki_consumer 的 TEXT_EXT_ALLOWLIST 是后期才加的,在那之前
-.sql.gz / .MOV / .jpeg 等二进制文件被 pipeline_text 的 else 兜底当成
-text/plain 直接 decode("utf-8", errors="replace") + chunk,污染了 Qdrant。
+Background: wiki_consumer's TEXT_EXT_ALLOWLIST was only added later. Before
+that, binary files like .sql.gz / .MOV / .jpeg fell through pipeline_text's
+else branch, got treated as text/plain, decoded directly with
+decode("utf-8", errors="replace"), and chunked - polluting Qdrant.
 
-本脚本扫 parser.db,找出 file_records 里所有 file_id 的全部 paths
-都不在 TEXT_EXT_ALLOWLIST 的(即:这个文件本质就不应该被索引),
-然后:
-  - dry-run(默认):只打印,不动
-  - --apply:从 Qdrant 删点 → 删 file_records / file_paths / parse_jobs
+This script scans parser.db and finds file_records whose file_id has every
+one of its paths outside TEXT_EXT_ALLOWLIST (i.e. this file fundamentally
+should never have been indexed), then:
+  - dry-run (default): print only, no changes
+  - --apply: delete points from Qdrant -> delete file_records / file_paths / parse_jobs
 
-数据安全:
-  - 多 path 中只要有一条命中 allowlist 就保留(说明同样内容也曾以合法
-    扩展名出现,可能是用户真的索引过)
-  - 用 file_id 删 Qdrant 不会误删别的文件
-  - 操作前请确保 nimoos-parser 服务停掉,避免 race
+Data safety:
+  - if any of a file_id's multiple paths matches the allowlist, it's kept
+    (the same content also appeared under a legitimate extension, so the
+    user may genuinely have indexed it)
+  - deleting from Qdrant by file_id can't accidentally hit other files
+  - make sure the nimoos-parser service is stopped before running this, to avoid a race
 
-用法:
+Usage:
   sudo /opt/nimoos-parser/venv/bin/python3 \\
     /home/nimo/nimoos/NimoOS-Parser/cleanup_binary_vectors.py [--apply]
 """
@@ -30,7 +32,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# 让脚本能 import parser.* —— 脚本放在 repo 根
+# let the script import parser.* -- it lives at the repo root
 sys.path.insert(0, str(Path(__file__).parent))
 
 from parser.wiki_consumer import TEXT_EXT_ALLOWLIST
@@ -48,9 +50,9 @@ def fmt_bytes(n: int) -> str:
 
 
 def find_pollution(conn: sqlite3.Connection) -> list[dict]:
-    """返回 [{file_id, sample_path, mime, vector_count, all_paths}]
-    其中 all_paths 是 file_id 下所有 (root_id, path),仅当全部扩展名
-    都不在 allowlist 才视为污染。"""
+    """Returns [{file_id, sample_path, mime, vector_count, all_paths}]
+    where all_paths is every (root_id, path) under a file_id; only counted as
+    pollution if none of the extensions are in the allowlist."""
     fr_rows = list(conn.execute("""
         SELECT file_id, mime, size, vector_count
         FROM file_records
@@ -65,7 +67,7 @@ def find_pollution(conn: sqlite3.Connection) -> list[dict]:
         ))
         if not paths:
             continue
-        # 全部 path 的扩展名都得 NOT IN allowlist 才算污染
+        # only counts as pollution if every path's extension is NOT IN the allowlist
         exts = {Path(p["path"]).suffix.lower() for p in paths}
         if any(e in TEXT_EXT_ALLOWLIST for e in exts):
             continue
@@ -83,9 +85,9 @@ def find_pollution(conn: sqlite3.Connection) -> list[dict]:
 
 def print_report(items: list[dict]) -> None:
     if not items:
-        print("没有命中污染条目 ✓")
+        print("No polluted entries found ✓")
         return
-    print(f"\n{'file_id (前 12)':14} {'扩展':12} {'chunks':>7} {'size':>8}  path 样例")
+    print(f"\n{'file_id (first 12)':14} {'ext':12} {'chunks':>7} {'size':>8}  sample path")
     print("-" * 100)
     total_chunks = 0
     total_size = 0
@@ -96,8 +98,8 @@ def print_report(items: list[dict]) -> None:
         print(f"{it['file_id'][:12]:14} {ext_disp:12} {it['vector_count']:>7} "
               f"{fmt_bytes(it['size']):>8}  ...{it['sample_path'][-55:]}")
     print("-" * 100)
-    print(f"合计:{len(items)} 个 file_id, "
-          f"{total_chunks} chunks, 原文件 {fmt_bytes(total_size)}")
+    print(f"Total: {len(items)} file_ids, "
+          f"{total_chunks} chunks, original files {fmt_bytes(total_size)}")
 
 
 def apply_cleanup(conn: sqlite3.Connection, items: list[dict]) -> None:
@@ -108,18 +110,18 @@ def apply_cleanup(conn: sqlite3.Connection, items: list[dict]) -> None:
     deleted_vectors = 0
     for it in items:
         fid = it["file_id"]
-        print(f"  删 {fid[:12]} ({it['vector_count']} chunks, "
+        print(f"  deleting {fid[:12]} ({it['vector_count']} chunks, "
               f"...{it['sample_path'][-50:]})")
         # 1) qdrant
         qstore.delete_file(file_id=fid)
         deleted_vectors += it["vector_count"]
-        # 2) sqlite — file_paths 先删(没外键也安全),再 file_records,再 parse_jobs
+        # 2) sqlite - delete file_paths first (safe even without a foreign key), then file_records, then parse_jobs
         conn.execute("DELETE FROM file_paths WHERE file_id = ?", (fid,))
         conn.execute("DELETE FROM file_records WHERE file_id = ?", (fid,))
-    # parse_jobs 没有 file_id 列,按 path 清理:删那些扩展名不在 allowlist 的 job
-    # 用 sqlite 的 substr + lower 处理。
+    # parse_jobs has no file_id column, so clean up by path: delete jobs whose
+    # extension isn't in the allowlist, using sqlite's substr + lower.
     paths_to_purge = [it["sample_path"] for it in items]
-    # 更稳:遍历 parse_jobs,Python 侧判定
+    # more robust: iterate parse_jobs and decide on the Python side
     job_rows = list(conn.execute(
         "SELECT id, path FROM parse_jobs WHERE done_at IS NOT NULL"
     ))
@@ -131,38 +133,38 @@ def apply_cleanup(conn: sqlite3.Connection, items: list[dict]) -> None:
     if purge_ids:
         conn.executemany("DELETE FROM parse_jobs WHERE id = ?",
                          [(i,) for i in purge_ids])
-        print(f"  清掉 parse_jobs 里 {len(purge_ids)} 条 binary 历史记录")
+        print(f"  cleaned up {len(purge_ids)} binary history records in parse_jobs")
     conn.commit()
-    print(f"\n✓ 删了 {len(items)} 个 file_records, ~{deleted_vectors} qdrant points")
+    print(f"\n✓ deleted {len(items)} file_records, ~{deleted_vectors} qdrant points")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true",
-                    help="真删(默认 dry-run)")
+                    help="actually delete (default is dry-run)")
     ap.add_argument("--db", default=DB_PATH)
     args = ap.parse_args()
 
     if not os.path.exists(args.db):
-        print(f"找不到 parser.db: {args.db}", file=sys.stderr)
+        print(f"parser.db not found: {args.db}", file=sys.stderr)
         return 1
 
-    # 确认服务停掉
+    # confirm the service is stopped
     if args.apply:
         rc = os.system("systemctl is-active --quiet nimoos-parser.service")
         if rc == 0:
-            print("nimoos-parser 在跑,先停掉:", file=sys.stderr)
+            print("nimoos-parser is running, stop it first:", file=sys.stderr)
             print("    sudo systemctl stop nimoos-parser.service", file=sys.stderr)
             return 2
 
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
 
-    print(f"allowlist 大小: {len(TEXT_EXT_ALLOWLIST)} 个扩展名")
+    print(f"allowlist size: {len(TEXT_EXT_ALLOWLIST)} extensions")
     print(f"parser.db: {args.db}")
     print(f"qdrant: {QDRANT_URL}")
-    print(f"模式: {'APPLY (会真删)' if args.apply else 'DRY-RUN (只打印)'}")
+    print(f"mode: {'APPLY (will actually delete)' if args.apply else 'DRY-RUN (print only)'}")
 
     items = find_pollution(conn)
     print_report(items)
@@ -171,12 +173,12 @@ def main() -> int:
         return 0
 
     if not args.apply:
-        print("\n要真删请加 --apply,记得先 stop nimoos-parser.")
+        print("\nTo actually delete, add --apply, and remember to stop nimoos-parser first.")
         return 0
 
-    print("\n>>> 开始清理 <<<")
+    print("\n>>> starting cleanup <<<")
     apply_cleanup(conn, items)
-    print("\n下一步建议:")
+    print("\nSuggested next steps:")
     print("  sudo systemctl start nimoos-parser.service")
     print("  curl -s http://127.0.0.1:6333/collections/text_chunks | "
           "python3 -m json.tool | head")

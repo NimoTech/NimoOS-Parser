@@ -11,8 +11,9 @@ def _conn():
     return app_state.conn
 
 
-# TODO(perf): MVP 用 Python 内存聚合,fetchall 在 100k+ pending 时占内存可观
-# 真出现瓶颈再改 SQLite GROUP BY (substr+instr 拼 dirname)
+# TODO(perf): MVP aggregates in Python memory; fetchall can use significant memory
+# at 100k+ pending. Switch to SQLite GROUP BY (substr+instr to build dirname) if this
+# actually becomes a bottleneck.
 @router.get("/pending")
 async def folders_pending(limit: int = Query(20, ge=1, le=200)) -> dict:
     rows = _conn().execute(

@@ -1,4 +1,5 @@
-"""visual 入库路由。音频(audio)命名空间本期只预留不注册,见 spec §2.1。"""
+"""Visual ingest routes. The audio namespace is reserved but not registered
+this cycle, see spec §2.1."""
 import json
 import logging
 import time
@@ -13,7 +14,7 @@ log = logging.getLogger("parser.routes.visual")
 
 router = APIRouter(prefix="/v1/parser/visual", tags=["visual"])
 
-VISUAL_JOB_PRIORITY = 200  # 文档 job 默认 100:文档优先,照片补扫殿后
+VISUAL_JOB_PRIORITY = 200  # document jobs default to 100: documents take priority, photo backfill scans come last
 
 
 class IngestReq(BaseModel):
@@ -28,14 +29,14 @@ def _allowed_dirs() -> list[Path]:
     from parser.main import app_state
     if app_state.settings is not None:
         raw = app_state.settings.visual_allowed_dirs
-    else:  # 测试夹具跳过 settings 时读环境/默认值,与生产同一解析路径
+    else:  # test fixtures that skip settings read env/defaults, same resolution path as production
         from parser.config import load_settings
         raw = load_settings().visual_allowed_dirs
     return [Path(x.strip()) for x in raw.split(",") if x.strip()]
 
 
 def _validate_path(image_path: str) -> Path:
-    p = Path(image_path).resolve()  # resolve 吃掉 ../ 穿越
+    p = Path(image_path).resolve()  # resolve() collapses ../ traversal
     if not any(p.is_relative_to(d) for d in _allowed_dirs()):
         raise HTTPException(400, "image_path outside allowed directories")
     if not p.is_file():
@@ -64,20 +65,23 @@ def export_captions(
     limit: int = 512,
     offset: str | None = None,
 ):
-    """批量导出某 source 下的 caption(scroll 分页游标)。
-    供 Photos 周期 diff 拉取(智能时刻策展地基),存量增量同路径:首次全量拉
-    完即为存量,之后按 mtime_ms 在 Photos 侧自行做增量判断。"""
+    """Bulk-export captions for a given source (scroll pagination cursor).
+    Used by Photos' periodic diff pull (the foundation for Smart Moments
+    curation); backfill and incremental share the same path: the first full
+    pull is the backfill, after that Photos does its own incremental check
+    against mtime_ms."""
     from parser.main import app_state
     if app_state.qstore is None:
         raise HTTPException(503, "qdrant unavailable (qstore not ready)")
     limit = max(1, min(limit, 1024))
-    offset = offset or None  # 契约里 `offset=`(空字符串)等价首页,归一化成 None 再往下传
+    offset = offset or None  # in the contract `offset=` (empty string) means the first page; normalize to None before passing down
     prefix = f"{source}:"
     try:
         points, next_offset = app_state.qstore.scroll_captions(
             source, limit, offset)
     except Exception as exc:
-        # 与 delete_asset 同一错误语义:瞬断交由调用方(Photos)收到 503 后重试。
+        # Same error semantics as delete_asset: transient outages are left to the
+        # caller (Photos) to retry after getting a 503.
         raise HTTPException(503, f"qdrant unavailable, retry later: {exc}")
     items = []
     for p in points:
@@ -103,7 +107,9 @@ def delete_asset(source: str, asset_id: str):
     try:
         app_state.visual_pipeline.delete_asset(source=source, asset_id=asset_id)
     except Exception as exc:
-        # Qdrant 启动后中途瞬断:与上面"pipeline 未接线"分支同一错误语义,
-        # 删除不走 job 队列没有自动重试,交由调用方(Photos)收到 503 后重试。
+        # Qdrant went down transiently after startup: same error semantics as
+        # the "pipeline not wired" branch above. Delete doesn't go through the
+        # job queue so there's no automatic retry; left to the caller (Photos)
+        # to retry after getting a 503.
         raise HTTPException(503, f"qdrant unavailable, retry later: {exc}")
     return {"deleted": True}

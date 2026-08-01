@@ -182,7 +182,7 @@ def test_worker_without_wiki_client_does_not_crash(conn):
 
 
 def test_worker_writes_last_error_to_file_records_on_failure(tmp_path):
-    """Pipeline 抛错 → worker fail_job → file_records.last_error 同步写入。"""
+    """Pipeline raises -> worker fail_job -> file_records.last_error is written synchronously."""
     from parser.db import init_db
     from parser.repo_records import upsert_file_record, upsert_file_path
 
@@ -224,7 +224,7 @@ def test_worker_writes_last_error_to_file_records_on_failure(tmp_path):
 
 
 def test_worker_clears_last_error_on_success(tmp_path):
-    """成功路径覆写为 NULL。"""
+    """The success path overwrites it back to NULL."""
     from parser.db import init_db
     from parser.repo_records import (
         upsert_file_record, upsert_file_path, set_last_error,
@@ -238,7 +238,7 @@ def test_worker_clears_last_error_on_success(tmp_path):
     upsert_file_path(
         conn, root_id="r1", path="/p1", file_id="fid1", mtime_ms=0,
     )
-    set_last_error(conn, root_id="r1", path="/p1", error="prev")  # 先污染
+    set_last_error(conn, root_id="r1", path="/p1", error="prev")  # dirty it first
 
     class OkPipeline:
         def index_file(self, *, root_id, path, now_ms):
@@ -270,11 +270,12 @@ def test_worker_clears_last_error_on_success(tmp_path):
 
 @pytest.mark.asyncio
 async def test_pacing_sleep_interruptible_by_exit_flag():
-    """省电档 pacing 睡眠(最长 60s)必须被 set_concurrency 缩容打断,
-    不然被裁的 worker 最多 60s 后才退出(M2 终审 Medium)。"""
+    """The power-saving tier's pacing sleep (up to 60s) must be interruptible
+    by a set_concurrency scale-down, otherwise a trimmed worker wouldn't
+    exit for up to 60s (M2 final review, Medium)."""
     from parser.workers import WorkerPool
 
-    pool = WorkerPool.__new__(WorkerPool)  # 只测 helper,不走完整构造
+    pool = WorkerPool.__new__(WorkerPool)  # only testing the helper, skips full construction
     pool._stop = asyncio.Event()
     flag = asyncio.Event()
 

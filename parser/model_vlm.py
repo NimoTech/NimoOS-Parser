@@ -1,17 +1,23 @@
-"""Qwen3-VL caption 适配器 —— visual pipeline 的可替换推理后端。
+"""Qwen3-VL caption adapter - the swappable inference backend for the visual pipeline.
 
-与 model_bge_m3.py 的懒加载单例同源,但多两件事:
-1. 闲置卸载:VLM int4 运行时 4-6GB,不能像 BGE-M3 那样常驻;空闲超过
-   idle_ttl_s 由后台清扫线程 unload(借鉴 immich-ml MODEL_TTL 语义)。
-2. 单并发锁:CPU 上 VLM 推理吃满核,多并发只会互相拖慢并翻倍内存,
-   一把锁串行化(spec 既定 VlmConcurrency=1,如未来放开在此改语义)。
-openvino_genai / PIL / numpy 全部 deferred import:无这些依赖的环境
-(CI 单测)也能 import 本模块并用注入替身测试。
+Shares the lazy-loaded singleton approach with model_bge_m3.py, but adds two things:
+1. Idle unload: the VLM int4 runtime is 4-6GB, so it can't stay resident like
+   BGE-M3 does; a background sweeper thread unloads it once idle exceeds
+   idle_ttl_s (borrowed from immich-ml's MODEL_TTL semantics).
+2. Single-concurrency lock: VLM inference saturates CPU cores, so concurrent
+   calls would just slow each other down and double memory use - a single
+   lock serializes them (spec fixes VlmConcurrency=1; change the semantics
+   here if that's ever relaxed).
+openvino_genai / PIL / numpy are all deferred imports, so environments
+without these deps (CI unit tests) can still import this module and test with
+injected doubles.
 
-`_BaseCaptionBackend` 承载与具体推理引擎无关的生命周期骨架(懒加载/
-闲置清扫/单并发锁/三态包装),不同推理后端(OpenVINO/未来其它平台)
-只需继承并实现 `_load_pipe()`(返回底层 pipeline 对象)与
-`_infer(pipe, image_bytes) -> str`(用给定 pipeline 做一次推理)。
+`_BaseCaptionBackend` carries the lifecycle skeleton that's independent of
+the concrete inference engine (lazy load / idle sweep / single-concurrency
+lock / three-state wrapping); different inference backends (OpenVINO /
+future other platforms) only need to subclass and implement `_load_pipe()`
+(returns the underlying pipeline object) and `_infer(pipe, image_bytes) ->
+str` (runs one inference with the given pipeline).
 """
 import logging
 import threading
@@ -28,8 +34,10 @@ PROMPT_V1 = (
     "only, no preamble, no speculation about intent."
 )
 
-# 模型标识固定为 qwen3-vl-4b-int4,与实际存放路径(model_path)解耦——
-# version 字符串用于 model_versions 台账比对,不应随本地路径改名而漂移。
+# The model identifier is fixed as qwen3-vl-4b-int4, decoupled from the
+# actual storage path (model_path) - the version string is used for
+# model_versions ledger comparisons and shouldn't drift just because the
+# local path gets renamed.
 _MODEL_ID = "qwen3-vl-4b-int4"
 _PROMPT_VERSION = "prompt-v1"
 
@@ -37,40 +45,45 @@ _SWEEP_INTERVAL_S = 60
 
 
 class CaptionError(Exception):
-    """caption 生成失败(加载失败/推理异常/输出为空)。"""
+    """Caption generation failed (load failure / inference exception / empty output)."""
 
 
 class _BaseCaptionBackend:
-    """caption 推理后端的懒加载单例骨架(与具体推理引擎无关)。
+    """Lazy-loaded singleton skeleton for a caption inference backend (independent of the concrete inference engine).
 
-    子类必须实现:
-    - `_load_pipe()`:构造并返回底层 pipeline 对象;加载失败时应抛出
-      `CaptionError`(或任意异常,`caption` 会兜底包装)。
-    - `_infer(pipe, image_bytes) -> str`:用给定 pipeline 对一张图片
-      做一次推理,返回文本(可以未 strip/未判空,由 `caption` 统一处理)。
+    Subclasses must implement:
+    - `_load_pipe()`: build and return the underlying pipeline object; should
+      raise `CaptionError` on load failure (or any exception, which `caption`
+      will wrap as a fallback).
+    - `_infer(pipe, image_bytes) -> str`: run one inference on an image with
+      the given pipeline, returning text (need not be stripped or
+      empty-checked - `caption` handles that uniformly).
 
-    线程安全:`_lock` 同时保护加载态与推理调用,懒加载单例风格
-    (参照 model_bge_m3.py),额外提供闲置自动卸载与单并发推理锁。
+    Thread safety: `_lock` guards both the load state and inference calls,
+    following the lazy-loaded singleton style (mirroring model_bge_m3.py),
+    plus idle auto-unload and a single-concurrency inference lock.
     """
 
     def __init__(self, idle_ttl_s: int = 300) -> None:
         self.idle_ttl_s = idle_ttl_s
         self._pipe = None
-        self._lock = threading.Lock()      # 加载 + 推理单并发
+        self._lock = threading.Lock()      # single-concurrency for load + inference
         self._last_used = 0.0
         self._sweeper_started = False
-        # True = 本后端无法安全释放原生资源(如 llama-cpp 私有接口缺失),
-        # 闲置清扫跳过卸载(常驻比"每个卸载周期泄漏"安全);显式 unload 不受影响。
+        # True = this backend cannot safely release native resources (e.g. a
+        # missing llama-cpp private interface); idle sweep skips unloading
+        # (staying resident is safer than "leaking every unload cycle");
+        # explicit unload is unaffected.
         self._unload_disabled = False
 
-    # -- 可注入点(子类实现) ---------------------------------------------
+    # -- injectable points (implemented by subclasses) --------------------
     def _load_pipe(self):
         raise NotImplementedError
 
     def _infer(self, pipe, image_bytes: bytes) -> str:
         raise NotImplementedError
 
-    # -- 生命周期 -------------------------------------------------------
+    # -- lifecycle --------------------------------------------------------
     @property
     def is_loaded(self) -> bool:
         return self._pipe is not None
@@ -80,11 +93,13 @@ class _BaseCaptionBackend:
             self._unload_locked()
 
     def _close_pipe(self, pipe) -> None:
-        """卸载前的原生资源释放钩子(默认无操作)。
+        """Native resource release hook run before unload (no-op by default).
 
-        持有 native 句柄的后端(llama.cpp 的 mtmd/mmproj context 等)必须
-        覆盖本方法显式 free——只把 _pipe 置 None 交给 GC 是不够的:
-        2026-07-28 OOM 的主根因就是 mmproj(~836MB)在每个卸载周期泄漏。
+        Backends holding native handles (llama.cpp's mtmd/mmproj context,
+        etc.) must override this method to explicitly free them - just
+        setting _pipe to None and leaving it to GC is not enough: the main
+        root cause of the 2026-07-28 OOM was mmproj (~836MB) leaking on every
+        unload cycle.
         """
 
     def _unload_locked(self) -> None:
@@ -92,7 +107,7 @@ class _BaseCaptionBackend:
             log.info("unloading idle VLM (ttl=%ss)", self.idle_ttl_s)
             try:
                 self._close_pipe(self._pipe)
-            except Exception:  # 释放失败不阻断卸载,但必须留痕
+            except Exception:  # release failure must not block the unload, but must be logged
                 log.exception("vlm _close_pipe failed (continuing unload)")
             self._pipe = None
             import gc
@@ -101,7 +116,7 @@ class _BaseCaptionBackend:
             trim_malloc()
 
     def _sweep(self, now: Optional[float] = None) -> None:
-        """空闲清扫;now 参数供测试注入虚拟时钟。"""
+        """Idle sweep; the now parameter lets tests inject a virtual clock."""
         now = time.monotonic() if now is None else now
         with self._lock:
             if self._unload_disabled:
@@ -119,22 +134,26 @@ class _BaseCaptionBackend:
                 time.sleep(_SWEEP_INTERVAL_S)
                 try:
                     self._sweep()
-                except Exception:  # 清扫失败不致命,下轮再试
+                except Exception:  # a failed sweep isn't fatal, retry next round
                     log.exception("vlm sweeper failed")
 
         threading.Thread(target=loop, daemon=True,
                           name="vlm-idle-sweeper").start()
 
-    # -- 推理 -----------------------------------------------------------
+    # -- inference ----------------------------------------------------
     def caption(self, image_bytes: bytes) -> str:
         with self._lock:
             if self._pipe is None:
-                # 三态覆盖(加载失败/推理异常/空输出)要求加载失败也必须
-                # 归一为 CaptionError:_load_pipe 内部对"目录不存在"已主动
-                # 抛 CaptionError,但底层 pipeline 构造本身抛出的原始
-                # 异常(IR 损坏、运行时错误等)若不在此处兜底会以原始类型
-                # 打穿。已是 CaptionError 的原样放行,避免重复包裹丢失语义。
-                # 加载失败时 self._pipe 保持 None(不赋值),下次调用可重试。
+                # The three-state coverage (load failure / inference
+                # exception / empty output) requires load failures to also be
+                # normalized to CaptionError: _load_pipe already proactively
+                # raises CaptionError for "directory doesn't exist", but the
+                # raw exception thrown by the underlying pipeline
+                # construction itself (corrupt IR, runtime error, etc.) would
+                # otherwise propagate with its original type if not caught
+                # here. Already-CaptionError exceptions pass through as-is,
+                # to avoid double-wrapping and losing the original meaning.
+                # On load failure self._pipe stays None (never assigned), so the next call can retry.
                 try:
                     pipe = self._load_pipe()
                 except CaptionError:
@@ -149,7 +168,8 @@ class _BaseCaptionBackend:
             except Exception as exc:
                 raise CaptionError(f"vlm inference failed: {exc}") from exc
             self._last_used = time.monotonic()
-        # 底层推理返回类型随引擎/版本可能不是纯 str——统一 str() 兜住。
+        # The underlying inference call's return type may not be a plain str
+        # depending on the engine/version - uniformly coerce with str().
         text = str(result).strip()
         if not text:
             raise CaptionError("vlm returned empty caption")
@@ -157,7 +177,7 @@ class _BaseCaptionBackend:
 
 
 class OpenVINOCaptionBackend(_BaseCaptionBackend):
-    """Qwen3-VL(OpenVINO GenAI, int4)caption 推理后端。"""
+    """Qwen3-VL (OpenVINO GenAI, int4) caption inference backend."""
 
     def __init__(self, model_path: Path, device: str = "CPU",
                  idle_ttl_s: int = 300) -> None:
@@ -167,7 +187,7 @@ class OpenVINOCaptionBackend(_BaseCaptionBackend):
         self.version = f"{_MODEL_ID}/{_PROMPT_VERSION}/{device}"
 
     def _load_pipe(self):
-        import openvino_genai  # deferred:部署时 pip 装,单测不需要
+        import openvino_genai  # deferred: pip-installed at deploy time, not needed for unit tests
         if not self.model_path.is_dir():
             raise CaptionError(
                 f"VLM model dir not found: {self.model_path} — run "

@@ -75,7 +75,7 @@ def test_consumer_skips_directory_events(conn):
 
 
 def test_ingest_advances_cursor_to_last_event_seq(conn):
-    """同毫秒一批事件分页到达时,游标必须带 seq 前进,不许跳过后续页。"""
+    """When a batch of same-millisecond events arrives paginated, the cursor must advance with seq, and must not skip subsequent pages."""
     from parser.repo_models import get_wiki_cursor
     from parser.wiki_consumer import WikiConsumer
 
@@ -93,7 +93,7 @@ def test_ingest_advances_cursor_to_last_event_seq(conn):
 
 
 def test_cursor_migration_adds_last_seq(tmp_path):
-    """旧库(无 last_seq 列)打开后自动迁移,默认 0。"""
+    """An old DB (without the last_seq column) auto-migrates on open, defaulting to 0."""
     import sqlite3
     from parser.db import init_db
 
