@@ -80,9 +80,10 @@ class TextPipeline:
         size = os.path.getsize(path)
         ext = Path(path).suffix.lower()
 
-        # 防御:wiki_consumer 已经按 allowlist 过滤过事件,但 rescan / 历史 job
-        # 也走这里。allowlist 由 DB 持有,这是单一真理源 —— wiki_consumer 也走
-        # 同一个函数,确保两处永远不会出现"一处过滤一处没过滤"的污染。
+        # Defensive: wiki_consumer already filters events by the allowlist, but rescan /
+        # backlog jobs also go through here. The allowlist is held by the DB, the single
+        # source of truth - wiki_consumer goes through this same function, so the two
+        # paths can never diverge into "filtered on one side, not on the other".
         if not repo_allowlist.is_path_indexable(self.conn, root_id=root_id,
                                                  path=path):
             log.warning("skipped: not indexable per allowlist (path=%s)", path)

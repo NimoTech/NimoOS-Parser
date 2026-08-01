@@ -1,14 +1,18 @@
-"""LlamaCppCaptionBackend 单测 —— GGUF + mmproj 多模态推理后端。
+"""Unit tests for LlamaCppCaptionBackend - the GGUF + mmproj multimodal inference backend.
 
-与 test_model_vlm_openvino 系列同款风格:用 fake 注入替身跳过真实
-llama_cpp 依赖,只验证 `_BaseCaptionBackend` 骨架 + 本后端特有的
-version 拼接 / _infer 组包逻辑。
+Same style as the test_model_vlm_openvino series: uses fake injected doubles
+to skip the real llama_cpp dependency, and only verifies the
+`_BaseCaptionBackend` skeleton plus this backend's own version-string
+composition / _infer payload-building logic.
 
-注意:以下测试全部通过重写 `b._load_pipe` 绕开了 `_load_pipe` 内部真实
-的 handler 构造逻辑,因此此前 `Qwen25VLChatHandler`(不存在的类名)写错
-也不会被任何用例发现,直到本机冒烟才暴露。`test_load_pipe_uses_mtmd_handler`
-改为 monkeypatch `sys.modules["llama_cpp"]` 注入 fake 模块,让 `_load_pipe`
-走真实实现,断言其构造的 handler 类名与参数。
+Note: the tests below all bypass `_load_pipe`'s real handler-construction
+logic by overriding `b._load_pipe`, so a previous typo'd
+`Qwen25VLChatHandler` (a class name that doesn't exist) went undetected by
+any test case until it surfaced during a local smoke test.
+`test_load_pipe_uses_mtmd_handler` instead monkeypatches
+`sys.modules["llama_cpp"]` to inject a fake module, letting `_load_pipe` run
+its real implementation, and asserts on the handler class name and
+arguments it constructs.
 """
 import sys
 import threading
@@ -21,7 +25,7 @@ from parser.model_vlm_llamacpp import LlamaCppCaptionBackend
 
 
 class _FakeLlama:
-    """替身 Llama 实例:记录调用次数与并发峰值,可配置返回内容。"""
+    """A stand-in Llama instance: records call count and peak concurrency, return content is configurable."""
 
     def __init__(self, content="A dog on grass."):
         self.calls = 0
@@ -53,7 +57,7 @@ def _backend(tmp_path, content="A dog on grass.", **kwargs):
     b = LlamaCppCaptionBackend(gguf_path=gguf, mmproj_path=mmproj,
                                 backend_tag="cpu", **kwargs)
     fake = _FakeLlama(content=content)
-    b._load_pipe = lambda: fake  # 跳过真实 llama_cpp 加载
+    b._load_pipe = lambda: fake  # skip the real llama_cpp load
     return b, fake
 
 
@@ -62,7 +66,7 @@ def test_caption_and_version(tmp_path):
     assert "gguf" in b.version and "cpu" in b.version
     assert b.caption(b"\xff\xd8fake") == "A dog on grass."
     assert fake.calls == 1 and b.is_loaded
-    # _infer 必须把 PROMPT_V1 塞进 user message 的文本部分
+    # _infer must place PROMPT_V1 into the text part of the user message
     content_parts = fake.last_messages[0]["content"]
     texts = [p["text"] for p in content_parts if p.get("type") == "text"]
     assert PROMPT_V1 in texts
@@ -72,7 +76,7 @@ def test_caption_and_version(tmp_path):
 
 
 def test_single_concurrency(tmp_path):
-    # 与 OpenVINO 后端同款并发锁测试(4 线程,max_concurrent==1)
+    # Same concurrency-lock test as the OpenVINO backend (4 threads, max_concurrent==1)
     b, fake = _backend(tmp_path)
     threads = [threading.Thread(target=b.caption, args=(b"x",)) for _ in range(4)]
     for t in threads:
@@ -80,7 +84,7 @@ def test_single_concurrency(tmp_path):
     for t in threads:
         t.join()
     assert fake.calls == 4
-    assert fake.max_concurrent == 1, "推理必须被锁串行化"
+    assert fake.max_concurrent == 1, "inference must be serialized by the lock"
 
 
 def test_load_failure_wrapped(tmp_path):
@@ -92,15 +96,16 @@ def test_load_failure_wrapped(tmp_path):
 
 
 def test_empty_output_raises(tmp_path):
-    # create_chat_completion 返回空 content → CaptionError
+    # create_chat_completion returning empty content -> CaptionError
     b, fake = _backend(tmp_path, content="   ")
     with pytest.raises(CaptionError):
         b.caption(b"x")
 
 
 def test_missing_gguf_raises_caption_error(tmp_path):
-    # gguf/mmproj 文件不存在时 _load_pipe 应主动抛 CaptionError,而非
-    # 让底层 import/构造抛出的原始异常打穿。
+    # When the gguf/mmproj files don't exist, _load_pipe should proactively
+    # raise CaptionError, rather than letting the raw exception from the
+    # underlying import/construction propagate through.
     b = LlamaCppCaptionBackend(gguf_path=tmp_path / "missing.gguf",
                                 mmproj_path=tmp_path / "missing-mm.gguf",
                                 backend_tag="cpu")
@@ -121,7 +126,7 @@ def test_gpu_layers_and_backend_tag_in_version(tmp_path):
 
 
 class _FakeMTMDChatHandler:
-    """记录构造参数的 fake handler —— 断言类名/参数是本用例的核心。"""
+    """A fake handler that records its construction args - asserting on the class name/args is the crux of this test case."""
 
     instances = []
 
@@ -131,7 +136,7 @@ class _FakeMTMDChatHandler:
 
 
 class _FakeQwen25VLChatHandler:
-    """占位:仅用于证明真实代码没有构造这个(已废弃)类名的 handler。"""
+    """Placeholder: exists only to prove the real code doesn't construct a handler of this (deprecated) class name."""
 
     instances = []
 
@@ -146,7 +151,7 @@ class _FakeChatFormatModule:
 
 
 class _FakeLlamaCtor:
-    """记录 llama_cpp.Llama(...) 构造调用的 fake 类。"""
+    """A fake class that records llama_cpp.Llama(...) construction calls."""
 
     instances = []
 
@@ -165,12 +170,14 @@ class _FakeLlamaCppModule:
 
 
 def test_load_pipe_uses_mtmd_handler(tmp_path, monkeypatch):
-    """回归测试:_load_pipe 必须构造 MTMDChatHandler(不是已废弃/不存在
-    的 Qwen25VLChatHandler),且把 mmproj 路径原样传给 clip_model_path。
+    """Regression test: _load_pipe must construct MTMDChatHandler (not the
+    deprecated/nonexistent Qwen25VLChatHandler), and must pass the mmproj
+    path through unchanged to clip_model_path.
 
-    通过 monkeypatch sys.modules["llama_cpp"] 注入 fake 模块,让
-    LlamaCppCaptionBackend._load_pipe 走真实实现(不重写 _load_pipe),
-    这样类名写错才会被测试捕捉到。
+    Injects a fake module by monkeypatching sys.modules["llama_cpp"], so
+    LlamaCppCaptionBackend._load_pipe runs its real implementation (instead
+    of overriding _load_pipe) - only this way would a typo'd class name be
+    caught by the test.
     """
     _FakeMTMDChatHandler.instances.clear()
     _FakeQwen25VLChatHandler.instances.clear()
@@ -186,13 +193,13 @@ def test_load_pipe_uses_mtmd_handler(tmp_path, monkeypatch):
 
     pipe = b._load_pipe()
 
-    # 必须走 MTMDChatHandler,一次且仅一次,不能构造已废弃的类名。
+    # Must go through MTMDChatHandler, exactly once, never constructing the deprecated class name.
     assert len(_FakeMTMDChatHandler.instances) == 1
     assert not _FakeQwen25VLChatHandler.instances
     handler = _FakeMTMDChatHandler.instances[0]
     assert handler.clip_model_path == str(mmproj)
 
-    # Llama(...) 拿到的正是上面这个 handler 实例,且路径/gpu 层数透传正确。
+    # Llama(...) receives exactly this handler instance, with path/gpu-layer count passed through correctly.
     assert len(_FakeLlamaCtor.instances) == 1
     llama = _FakeLlamaCtor.instances[0]
     assert llama.chat_handler is handler
@@ -210,7 +217,7 @@ class _FakeExitStack:
 
 
 class _FakeMTMDHandlerWithStack:
-    """带 _exit_stack 的 fake(对应 llama-cpp-python 0.3.34 真实结构)。"""
+    """A fake with _exit_stack (matching llama-cpp-python 0.3.34's real structure)."""
 
     instances = []
 
@@ -221,7 +228,7 @@ class _FakeMTMDHandlerWithStack:
 
 
 class _FakeMTMDHandlerNoStack:
-    """无 _exit_stack 的 fake(模拟未来 llama-cpp-python 改私有接口)。"""
+    """A fake without _exit_stack (simulating a future llama-cpp-python private-interface change)."""
 
     def __init__(self, clip_model_path):
         self.clip_model_path = clip_model_path
@@ -265,8 +272,9 @@ def _real_backend(tmp_path, monkeypatch, handler_cls):
 
 
 def test_unload_frees_mtmd_context(tmp_path, monkeypatch):
-    """回归 2026-07-28 OOM 主根因:卸载必须关闭 handler 的 _exit_stack
-    (触发 mtmd_free 归还 ~836MB mmproj),并放掉 handler 引用。"""
+    """Regression for the main root cause of the 2026-07-28 OOM: unload must
+    close the handler's _exit_stack (triggering mtmd_free to release
+    ~836MB of mmproj), and must drop the handler reference."""
     _FakeMTMDHandlerWithStack.instances.clear()
     b = _real_backend(tmp_path, monkeypatch, _FakeMTMDHandlerWithStack)
     assert b.caption(b"\xff\xd8fake") == "a dog"
@@ -276,20 +284,21 @@ def test_unload_frees_mtmd_context(tmp_path, monkeypatch):
 
     b.unload()
 
-    assert llama.close_calls == 1, "Llama.close() 必须被调用(释放语言模型)"
-    assert handler._exit_stack.closed, "_exit_stack.close() 必须被调用(mtmd_free)"
+    assert llama.close_calls == 1, "Llama.close() must be called (releases the language model)"
+    assert handler._exit_stack.closed, "_exit_stack.close() must be called (mtmd_free)"
     assert b._chat_handler is None
     assert not b.is_loaded
     assert b._unload_disabled is False
 
 
 def test_missing_exit_stack_disables_idle_unload(tmp_path, monkeypatch):
-    """llama-cpp-python 私有接口变化时:禁用闲置自动卸载(常驻比每周期
-    泄漏安全),显式 unload 仍可用且不抛。"""
+    """When llama-cpp-python's private interface changes: disable idle
+    auto-unload (staying resident is safer than leaking every cycle);
+    explicit unload still works and doesn't raise."""
     b = _real_backend(tmp_path, monkeypatch, _FakeMTMDHandlerNoStack)
     b.caption(b"x")
     assert b._unload_disabled is True
     b._sweep(now=time.monotonic() + 10 ** 6)
-    assert b.is_loaded, "接口缺失时闲置清扫不得卸载"
+    assert b.is_loaded, "idle sweep must not unload when the interface is missing"
     b.unload()
     assert not b.is_loaded

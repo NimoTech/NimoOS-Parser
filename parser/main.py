@@ -114,9 +114,9 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
         )
         from parser.backendselect import select_caption_backend
         from parser.pipeline_visual import VisualPipeline
-        # 按 vlm_device 探测/选择多平台 caption 后端(Intel OpenVINO / AMD·NVIDIA
-        # GGUF+llama.cpp),返回的 SelectingCaptionBackend 对 VisualPipeline 透明,
-        # 与单一后端实现同一个 CaptionBackend 接口。
+        # Probe/select the multi-platform caption backend per vlm_device (Intel OpenVINO /
+        # AMD·NVIDIA GGUF+llama.cpp); the returned SelectingCaptionBackend is transparent to
+        # VisualPipeline, implementing the same CaptionBackend interface as a single backend.
         caption_backend = select_caption_backend(
             vlm_device=settings.vlm_device,
             model_path=settings.vlm_model_path,
@@ -224,8 +224,8 @@ async def _full_lifecycle_shutdown() -> None:
         except Exception:
             pass
         app_state.conn = None
-    # 与 conn 同批在 _full_lifecycle_startup 里写入的 settings 也一并归零,
-    # 避免残留污染下一次(测试)生命周期。
+    # Also zero out settings, written alongside conn in _full_lifecycle_startup,
+    # to avoid stale state polluting the next (test) lifecycle.
     app_state.settings = None
 
 
@@ -281,9 +281,10 @@ async def _lifespan(app: FastAPI):
                 except Exception:
                     pass
                 app_state.conn = None
-                # 与 conn 同批打开的 settings 也一并归零,避免残留污染下一次
-                # (测试)生命周期——否则后续读 app_state.settings 的路由会拿到
-                # 本次残留值,而不是各自测试注入的环境变量覆盖。
+                # Also zero out settings, opened alongside conn, to avoid stale state
+                # polluting the next (test) lifecycle - otherwise routes reading
+                # app_state.settings afterward would get this run's leftover value
+                # instead of each test's injected environment-variable overrides.
                 app_state.settings = None
         else:
             await _full_lifecycle_shutdown()

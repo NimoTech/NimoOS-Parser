@@ -45,7 +45,7 @@ def test_ingest_payload(pipe):
                    mime="image/jpeg",
                    meta={"taken_at": "2025-06-01", "place": "Tokyo, Japan"},
                    now_ms=123)
-    assert q.deletes == ["photos:a1"], "先清旧块保证幂等"
+    assert q.deletes == ["photos:a1"], "clear old chunks first to ensure idempotency"
     (points,) = q.upserts
     (pt,) = points
     pl = pt["payload"]
@@ -67,7 +67,7 @@ def test_ingest_deterministic_point_id(pipe):
                        mime="image/jpeg", meta={}, now_ms=1)
     id1 = q.upserts[0][0]["id"]
     id2 = q.upserts[1][0]["id"]
-    assert id1 == id2, "同资产重投喂 point id 必须稳定(覆盖式更新)"
+    assert id1 == id2, "point id must be stable across re-feeds of the same asset (overwrite-style update)"
 
 
 def test_delete_asset(pipe):

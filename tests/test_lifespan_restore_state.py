@@ -36,7 +36,7 @@ async def test_startup_applies_state_to_worker_pool(tmp_path: Path, monkeypatch)
     app = create_app(skip_workers=False)
     async with app.router.lifespan_context(app):
         pool = app_state.worker_pool
-        # Parser worker_pool 需要 qdrant 可达,如果环境没有,pool 是 None,跳过
+        # Parser's worker_pool needs Qdrant reachable; if the environment doesn't have it, pool is None, skip
         if pool is None:
             pytest.skip("worker_pool not started (qdrant unavailable in test env)")
         assert pool.concurrency == 1

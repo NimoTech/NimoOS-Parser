@@ -9,7 +9,7 @@ from parser.model_vlm import CaptionError, OpenVINOCaptionBackend, PROMPT_V1
 
 
 class _FakePipe:
-    """替身推理管线:记录调用并发,可注入延迟。"""
+    """A stand-in inference pipeline: records call concurrency, delay is injectable."""
 
     def __init__(self):
         self.calls = 0
@@ -31,8 +31,8 @@ class _FakePipe:
 def _backend(tmp_path, ttl=300):
     b = OpenVINOCaptionBackend(model_path=tmp_path, idle_ttl_s=ttl)
     fake = _FakePipe()
-    b._load_pipe = lambda: fake          # 注入替身,跳过 openvino_genai
-    b._decode_image = lambda data: data  # 跳过 PIL 解码
+    b._load_pipe = lambda: fake          # inject the double, skip openvino_genai
+    b._decode_image = lambda data: data  # skip PIL decoding
     return b, fake
 
 
@@ -50,14 +50,14 @@ def test_single_concurrency(tmp_path):
     for t in threads: t.start()
     for t in threads: t.join()
     assert fake.calls == 4
-    assert fake.max_concurrent == 1, "推理必须被锁串行化"
+    assert fake.max_concurrent == 1, "inference must be serialized by the lock"
 
 
 def test_idle_ttl_unload(tmp_path):
     b, _ = _backend(tmp_path, ttl=1)
     b.caption(b"x")
     assert b.is_loaded
-    b._sweep(now=time.monotonic() + 2)   # 模拟 2 秒后清扫
+    b._sweep(now=time.monotonic() + 2)   # simulate a sweep 2 seconds later
     assert not b.is_loaded
 
 
@@ -78,7 +78,7 @@ def test_load_failure_wrapped_as_caption_error_and_recoverable(tmp_path):
 
     with pytest.raises(CaptionError):
         b.caption(b"x")
-    assert not b.is_loaded  # 加载失败后 _pipe 保持 None,可重试
+    assert not b.is_loaded  # after a load failure, _pipe stays None so it can be retried
 
     fake = _FakePipe()
     b._load_pipe = lambda: fake
@@ -99,7 +99,7 @@ def test_device_param_reflected_in_version(tmp_path):
 
 
 def test_load_pipe_passes_device_to_vlmpipeline(tmp_path, monkeypatch):
-    """_load_pipe 必须把 self.device 透传给 openvino_genai.VLMPipeline。"""
+    """_load_pipe must pass self.device through unchanged to openvino_genai.VLMPipeline."""
     captured = {}
 
     class _FakeVLMPipeline:

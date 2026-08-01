@@ -21,14 +21,14 @@ def test_pacing_delay_follows_tier_and_load():
 
 def test_pacing_follows_live_concurrency_changes():
     p = _pool(0.0, 2)
-    p.concurrency = 1          # set_concurrency 动态改档后,pacing 立即跟随
+    p.concurrency = 1          # after set_concurrency changes the tier dynamically, pacing follows immediately
     assert p._pacing_delay() == 5.0
 
 
 def test_throughput_window():
     p = _pool(0.0, 2)
     now = time.time()
-    p._done_ts.extend([now - 700, now - 500, now - 10, now - 1])  # 700s 的应被剪掉
+    p._done_ts.extend([now - 700, now - 500, now - 10, now - 1])  # the 700s-old one should be trimmed
     tp = p.throughput()
     assert tp["done_last_10m"] == 3
     assert tp["rate_per_min"] == round(3 / 10.0, 2)

@@ -44,7 +44,7 @@ def test_row_factory_enables_dict_access(tmp_path):
 
 
 def test_init_db_adds_last_error_column():
-    """file_records 应有 last_error TEXT 列,可读写,默认 NULL。"""
+    """file_records should have a last_error TEXT column, readable/writable, defaulting to NULL."""
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         from parser.db import init_db
@@ -80,10 +80,10 @@ def test_init_db_adds_three_indexes():
 
 
 def test_init_db_migration_is_idempotent():
-    """第二次 init_db 同库不应抛 (列已存在 / 索引已存在)。"""
+    """A second init_db on the same DB should not raise (column already exists / index already exists)."""
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         from parser.db import init_db
         p = Path(td) / "p.db"
         init_db(p)
-        init_db(p)  # 第二次,关键 —— ALTER 列重复加不能抛
+        init_db(p)  # second call, the key point - re-adding an ALTER column must not raise

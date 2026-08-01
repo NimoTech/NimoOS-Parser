@@ -30,5 +30,5 @@ def test_folders_pending_respects_limit(client):
     r = client.get("/v1/parser/folders/pending?limit=1")
     body = r.json()
     assert len(body["folders"]) == 1
-    assert body["folders"][0]["count"] == 2  # 最高的那个
+    assert body["folders"][0]["count"] == 2  # the highest one
     assert body["total_groups"] == 2

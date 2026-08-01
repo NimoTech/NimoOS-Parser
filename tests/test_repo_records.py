@@ -72,7 +72,7 @@ def test_tombstone_set_clear(conn):
 
 
 def test_set_last_error_writes_to_file_record_via_path_lookup(tmp_path):
-    """通过 (root_id, path) 找到 file_id,更新 file_records.last_error。"""
+    """Find file_id via (root_id, path), and update file_records.last_error."""
     from parser.db import init_db
     from parser.repo_records import (
         upsert_file_record, upsert_file_path, set_last_error,
@@ -117,9 +117,9 @@ def test_set_last_error_with_none_clears(tmp_path):
 
 
 def test_set_last_error_silently_skips_when_path_unknown(tmp_path):
-    """job 在 file_paths 创建前就失败的情况 —— no-op,不抛。"""
+    """Case where a job fails before file_paths was created - no-op, never raises."""
     from parser.db import init_db
     from parser.repo_records import set_last_error
     conn = init_db(tmp_path / "p.db")
     set_last_error(conn, root_id="ghost", path="/none", error="boom")
-    # 不抛即通过
+    # not raising is the pass condition

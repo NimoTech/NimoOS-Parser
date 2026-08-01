@@ -176,8 +176,9 @@ class WorkerPool:
                     set_last_error, self.conn,
                     root_id=job["root_id"], path=job["path"], error=None,
                 )
-                # visual op(视觉资产入库)不走 Wiki 回执协议——那是给 Wiki
-                # 文件类 job 用的确认通道,visual_ingest 的调用方是 Photos。
+                # visual ops (visual asset ingest) don't go through the Wiki
+                # receipt protocol - that's the confirmation channel for Wiki
+                # file-type jobs; visual_ingest's caller is Photos.
                 if not job["op"].startswith("visual"):
                     await self._notify_wiki(job, status="indexed" if job["op"] != "delete" else "deleted")
             except Exception as e:
@@ -247,8 +248,9 @@ class WorkerPool:
                 )
         elif op == "visual_ingest":
             if self.visual_pipeline is None:
-                # Qdrant 掉线时 startup 不接线;抛错让 job 走失败重试,
-                # Qdrant 恢复后 retry_failed_jobs 可整批捞回。
+                # Not wired at startup when Qdrant is down; raise so the job
+                # takes the failure/retry path, and retry_failed_jobs can
+                # sweep the whole batch back in once Qdrant recovers.
                 raise RuntimeError("visual pipeline not wired (qdrant down?)")
             payload = json.loads(job["sub_modality"] or "{}")
             self.visual_pipeline.ingest_asset(

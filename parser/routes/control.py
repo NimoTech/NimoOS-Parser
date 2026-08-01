@@ -33,7 +33,7 @@ def _pool():
 async def get_control_state() -> dict:
     s = get_state(_conn())
     # Expose what `auto` actually resolves to right now, so the UI can show
-    # 「自动 (cuda)」or 「自动 (cpu)」 without re-implementing the detection.
+    # "Auto (cuda)" or "Auto (cpu)" without re-implementing the detection.
     s["resolved_device"] = resolve_device(s["device"])
     return s
 

@@ -297,8 +297,9 @@ class QdrantStore:
 
     def scroll_captions(self, source: str, limit: int = 512,
                         offset: str | None = None) -> tuple[list[dict], str | None]:
-        """按 source 批量导出 caption 文本块(scroll 分页游标写法照抄
-        backfill_mtime.py:65-72)。供 Photos 周期 diff 拉取,存量增量同路径。"""
+        """Bulk-export caption text chunks by source (scroll pagination cursor pattern
+        copied from backfill_mtime.py:65-72). Used by Photos' periodic diff pull, same
+        code path for both backfill and incremental."""
         points, next_offset = self.client.scroll(
             collection_name=self.text_collection,
             scroll_filter=qm.Filter(must=[
