@@ -76,7 +76,7 @@ jobs:
             --deselect 'tests/test_workers_concurrency.py::test_scale_down_finishes_in_flight_job_cleanly'
 
   # The document-conversion path is the point of this service, and the job
-  # above cannot see it. Running the full stack takes minutes and gigabytes,
-  # so it belongs on a schedule rather than on every pull request — but it does
-  # need to exist. Tracked, not written here, because it could not be validated
-  # locally: see the CI notes in nimo_os_docs.
+  # above cannot see it: it needs docling, the embedding model and a reachable
+  # Qdrant. Running that takes minutes and gigabytes, so it belongs on a
+  # schedule rather than on every pull request — but it does need to exist.
+  # Not written here because it could not be validated locally first.
