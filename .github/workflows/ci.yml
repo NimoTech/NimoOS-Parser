@@ -79,4 +79,4 @@ jobs:
   # above cannot see it. Running the full stack takes minutes and gigabytes,
   # so it belongs on a schedule rather than on every pull request — but it does
   # need to exist. Tracked, not written here, because it could not be validated
-  # locally: see the CI notes in nimo_os_docs.
+  # locally against internal CI notes.
