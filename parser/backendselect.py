@@ -41,6 +41,27 @@ _PROBE_TIMEOUT_S = 5
 # Fallback candidate: the last-resort tier that must always be reachable (pure CPU inference).
 _FALLBACK_CANDIDATE = {"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}
 
+# The GGUF twin of _FALLBACK_CANDIDATE, used when only GGUF weights are on
+# disk: llama.cpp's CPU path runs on any machine, while openvino:CPU still
+# needs the IR weights and would just fail to load.
+_GGUF_FALLBACK_CANDIDATE = {"runtime": "llamacpp", "device": "cpu", "tier": 10, "label": "CPU (gguf)"}
+
+
+def _weights_present(model_path: Path, gguf_path: Path, mmproj_path: Path) -> tuple[bool, bool]:
+    """Which weight forms are actually on disk: (IR, GGUF).
+
+    The install channel ships only the GGUF weights by default (the IR form is
+    produced by converting on an Intel machine, see scripts/vlm/README.md), so
+    "hardware says openvino, disk says gguf" is the normal state of a fresh
+    install — candidate selection has to consult the disk, not just the probes.
+    """
+    try:
+        ir_ok = model_path.is_dir() and any(model_path.iterdir())
+    except OSError:
+        ir_ok = False
+    gguf_ok = gguf_path.is_file() and mmproj_path.is_file()
+    return ir_ok, gguf_ok
+
 # runtime(+device) priority, lower number = higher priority; used to break ties when tier is equal.
 _RUNTIME_PRIORITY = {
     "openvino": 0,
@@ -197,21 +218,43 @@ def select_caption_backend(*, vlm_device: str, model_path: Path,
 
     - `vlm_device == "auto"`: probe + score, and use the ranked result as the candidate chain.
     - Explicit `runtime:device` (e.g. `llamacpp:cuda`): only this one candidate
-      (the chain's tail still gets an automatic openvino:CPU fallback appended in `SelectingCaptionBackend`).
+      (the chain's tail still gets an automatic CPU fallback appended in
+      `SelectingCaptionBackend` — openvino:CPU or llamacpp:cpu, whichever the
+      on-disk weights can actually load).
     - Invalid value (neither auto nor a recognized spec): warn, then fall back to auto.
     """
+    probed = True
     if vlm_device == "auto":
         ranked = rank(probe_hardware())
     elif _is_valid_spec(vlm_device):
         runtime, _, device = vlm_device.partition(":")
         ranked = [{"runtime": runtime, "device": device, "tier": 0,
                    "label": vlm_device}]
+        probed = False  # an explicit spec is the operator's call; don't second-guess it
     else:
         log.warning("invalid vlm_device config %r, falling back to auto hardware probe", vlm_device)
         ranked = rank(probe_hardware())
 
+    # Probes describe the hardware, not the weights: an Intel-only machine
+    # yields a pure-openvino chain, and if the disk only holds GGUF weights
+    # (what the installer ships), every link would fail to load and captions
+    # would be dead even though llama.cpp could serve them on CPU. When
+    # exactly one weight form is present, drop the candidates that can never
+    # load; the guaranteed tail matching the surviving form is appended by
+    # SelectingCaptionBackend.
+    if probed:
+        ir_ok, gguf_ok = _weights_present(model_path, gguf_path, mmproj_path)
+        if ir_ok != gguf_ok:
+            keep = "openvino" if ir_ok else "llamacpp"
+            kept = [c for c in ranked if c["runtime"] == keep]
+            if len(kept) != len(ranked):
+                log.info("VLM weights on disk only fit %s (IR present=%s, GGUF present=%s); "
+                         "dropping %d candidate(s) that could never load",
+                         keep, ir_ok, gguf_ok, len(ranked) - len(kept))
+            ranked = kept
+
     if not ranked:
-        ranked = [dict(_FALLBACK_CANDIDATE)]
+        ranked = []  # SelectingCaptionBackend appends the weight-appropriate tail
 
     return SelectingCaptionBackend(
         ranked, model_path=model_path, gguf_path=gguf_path,
@@ -230,8 +273,9 @@ class SelectingCaptionBackend:
     is True) does not trigger demotion; the exception is re-raised to the
     caller as-is, so a healthy backend doesn't get permanently and wrongly
     demoted to CPU over an occasional bad image. On demotion, the backend is
-    rebuilt and retried; the chain's tail always has an openvino:CPU fallback
-    appended (pure CPU inference, which should in theory always work) - if
+    rebuilt and retried; the chain's tail always has a CPU fallback appended
+    (openvino:CPU, or llamacpp:cpu when only GGUF weights are on disk —
+    pure CPU inference, which should in theory always work) - if
     it still fails after demoting all the way to the tail (and it's still a
     load failure), the exception is re-raised as-is. Each demotion logs a
     warning, so ops can figure out "why isn't this using the expected
@@ -241,9 +285,16 @@ class SelectingCaptionBackend:
     def __init__(self, ranked: list[dict], *, model_path: Path,
                  gguf_path: Path, mmproj_path: Path, idle_ttl_s: int) -> None:
         self._ranked = list(ranked)
+
+        # The guaranteed tail must be loadable with the weights actually on
+        # disk: openvino:CPU when the IR form exists (the historical default),
+        # llamacpp:cpu when only GGUF weights are present — an openvino tail
+        # without IR weights is a fallback in name only.
+        ir_ok, gguf_ok = _weights_present(model_path, gguf_path, mmproj_path)
+        tail = dict(_GGUF_FALLBACK_CANDIDATE) if (gguf_ok and not ir_ok) else dict(_FALLBACK_CANDIDATE)
         last = self._ranked[-1] if self._ranked else None
-        if last is None or (last["runtime"], last["device"]) != ("openvino", "CPU"):
-            self._ranked.append(dict(_FALLBACK_CANDIDATE))
+        if last is None or (last["runtime"], last["device"]) != (tail["runtime"], tail["device"]):
+            self._ranked.append(tail)
 
         self._model_path = model_path
         self._gguf_path = gguf_path
