@@ -305,3 +305,73 @@ def test_selecting_backend_no_demote_on_cold_start_first_frame_failure(
     assert wrapper._backend is stub     # active backend unchanged
     assert wrapper._index == 0          # candidate chain index unchanged
     assert not any("demoted" in r.getMessage() for r in caplog.records)  # no demotion warning
+
+
+# ---------------------------------------------------------------------------
+# weight-availability-aware selection (a fresh install ships only GGUF weights;
+# the IR form only exists after an on-machine conversion)
+# ---------------------------------------------------------------------------
+
+def _fake_probes(monkeypatch, openvino=(), nvidia=(), amd=()):
+    monkeypatch.setattr(bs, "_probe_openvino", lambda: list(openvino))
+    monkeypatch.setattr(bs, "_probe_nvidia", lambda: list(nvidia))
+    monkeypatch.setattr(bs, "_probe_amd", lambda: list(amd))
+
+
+def _gguf_weights(tmp_path):
+    gguf = tmp_path / "model.gguf"
+    gguf.write_bytes(b"g")
+    mm = tmp_path / "mmproj.gguf"
+    mm.write_bytes(b"m")
+    return gguf, mm
+
+
+def test_gguf_only_intel_machine_gets_llamacpp_cpu(monkeypatch, tmp_path):
+    # An Intel machine probes to a pure-openvino chain — before the weight
+    # check, every link needed IR weights and captioning was dead on a
+    # GGUF-only disk (the whole point of this fix).
+    _fake_probes(monkeypatch, openvino=[
+        {"runtime": "openvino", "device": "GPU.0", "tier": 20, "label": "iGPU"},
+        {"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}])
+    gguf, mm = _gguf_weights(tmp_path)
+    sel = bs.select_caption_backend(
+        vlm_device="auto", model_path=tmp_path / "ir-absent",
+        gguf_path=gguf, mmproj_path=mm, idle_ttl_s=60)
+    assert [bs._candidate_spec(c) for c in sel._ranked] == ["llamacpp:cpu"]
+    assert type(sel._backend).__name__ == "LlamaCppCaptionBackend"
+
+
+def test_gguf_only_nvidia_keeps_cuda_then_cpu_tail(monkeypatch, tmp_path):
+    _fake_probes(monkeypatch,
+        openvino=[{"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}],
+        nvidia=[{"runtime": "llamacpp", "device": "cuda", "tier": 30, "label": "NVIDIA"}])
+    gguf, mm = _gguf_weights(tmp_path)
+    sel = bs.select_caption_backend(
+        vlm_device="auto", model_path=tmp_path / "ir-absent",
+        gguf_path=gguf, mmproj_path=mm, idle_ttl_s=60)
+    assert [bs._candidate_spec(c) for c in sel._ranked] == ["llamacpp:cuda", "llamacpp:cpu"]
+
+
+def test_ir_only_machine_drops_gguf_candidates(monkeypatch, tmp_path):
+    _fake_probes(monkeypatch,
+        openvino=[{"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}],
+        amd=[{"runtime": "llamacpp", "device": "vulkan", "tier": 30, "label": "AMD"}])
+    ir = tmp_path / "ir"
+    ir.mkdir()
+    (ir / "openvino_model.xml").write_text("x")
+    sel = bs.select_caption_backend(
+        vlm_device="auto", model_path=ir,
+        gguf_path=tmp_path / "no.gguf", mmproj_path=tmp_path / "no-mm.gguf", idle_ttl_s=60)
+    assert [bs._candidate_spec(c) for c in sel._ranked] == ["openvino:CPU"]
+
+
+def test_no_weights_keeps_probe_chain_unchanged(monkeypatch, tmp_path):
+    # Neither form on disk: selection must behave exactly as before this fix,
+    # so the "no weights installed at all" error surfaces the same way.
+    _fake_probes(monkeypatch, openvino=[
+        {"runtime": "openvino", "device": "GPU.0", "tier": 20, "label": "iGPU"},
+        {"runtime": "openvino", "device": "CPU", "tier": 10, "label": "CPU"}])
+    sel = bs.select_caption_backend(
+        vlm_device="auto", model_path=tmp_path / "ir-absent",
+        gguf_path=tmp_path / "no.gguf", mmproj_path=tmp_path / "no-mm.gguf", idle_ttl_s=60)
+    assert [bs._candidate_spec(c) for c in sel._ranked] == ["openvino:GPU.0", "openvino:CPU"]
