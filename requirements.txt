@@ -9,6 +9,15 @@ python-multipart>=0.0.20
 # ---- vector store / embedding / reranker ----
 qdrant-client[fastembed]>=1.10
 FlagEmbedding>=1.2.10
+# Explicit upper bound, do NOT drop it. transformers 5.x removed
+# prepare_for_model from the tokenizer base class, but FlagEmbedding 1.4.0 (the
+# latest release) still calls it in inference/reranker/encoder_only/base.py:147,
+# so /v1/parser/rerank 500s with
+# `AttributeError: XLMRobertaTokenizer has no attribute prepare_for_model`.
+# FlagEmbedding's own metadata says transformers<6.0.0, which does NOT catch
+# this, so the bound has to live here. docling-ibm-models allows >=4.42.0, so
+# 4.x satisfies every other consumer in the tree.
+transformers>=4.44.2,<5
 
 # ---- document conversion (PDF / DOCX / PPTX / XLSX / HTML) ----
 # docling pulls in torch / torchvision / transformers as transitive deps.

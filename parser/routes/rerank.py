@@ -38,8 +38,14 @@ def get_reranker():
     return BGEReranker.load(device=current_device(app_state.conn))
 
 
+# Deliberately a plain `def`, not `async def`: reranking is CPU-bound and
+# synchronous (~26s for 20 real chunks on CPU). As an `async def` it ran inline
+# on the event loop and froze the whole service for its duration - every other
+# endpoint (stats, healthz, control/state, and the path expansion Search issues
+# right after) timed out. FastAPI runs a sync handler in its threadpool instead,
+# so the loop stays responsive. BGEReranker serialises the inference itself.
 @router.post("/rerank", response_model=RerankResponse)
-async def rerank(req: RerankRequest) -> RerankResponse:
+def rerank(req: RerankRequest) -> RerankResponse:
     if req.model != "bge-reranker-v2-m3":
         raise HTTPException(400, f"unknown reranker: {req.model}")
     if len(req.candidates) > MAX_CANDIDATES:
