@@ -14,7 +14,7 @@ from typing import Optional
 
 import numpy as np
 
-from parser.config import settings
+from parser.config import load_settings
 
 log = logging.getLogger("parser.model_bge_m3_ov")
 
@@ -62,7 +62,7 @@ class BGEM3OV:
             import openvino
             from transformers import AutoTokenizer
 
-            path = settings.text_embed_ov_path
+            path = load_settings().text_embed_ov_path
             core = openvino.Core()
             compiled = core.compile_model(str(path / "openvino_model.xml"), "GPU")
             tokenizer = AutoTokenizer.from_pretrained(str(path))

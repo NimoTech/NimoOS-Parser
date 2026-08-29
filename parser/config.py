@@ -109,10 +109,3 @@ def load_settings(conf_path: Path = DEFAULT_CONF) -> Settings:
             else:
                 setattr(s, name, val)
     return s
-
-
-# Module-level singleton for call sites that don't have access to app_state
-# (e.g. model loader classmethods like BGEM3OV.load()). Most of the app still
-# threads an explicit Settings instance via app_state/load_settings(); this is
-# additive, not a replacement for that pattern.
-settings = load_settings()
