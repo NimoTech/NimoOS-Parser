@@ -5,7 +5,8 @@ def test_get_state_default(client):
     assert body["paused"] is False
     assert body["concurrency"] == 2
     assert body["device"] == "auto"
-    assert body["resolved_device"] in ("cuda", "cpu")
+    # resolution depends on the real host's hardware (cuda / OpenVINO gpu / cpu)
+    assert body["resolved_device"] in ("cuda", "gpu", "cpu")
     assert body["ocr_enabled"] is False
 
 
@@ -30,7 +31,8 @@ def test_set_device_valid(client):
         assert r.status_code == 200
         body = r.json()
         assert body["device"] == device
-        assert body["resolved_device"] in ("cuda", "cpu")
+        # resolution depends on the real host's hardware (cuda / OpenVINO gpu / cpu)
+        assert body["resolved_device"] in ("cuda", "gpu", "cpu")
         # state endpoint reflects the change
         assert client.get("/v1/parser/control/state").json()["device"] == device
 

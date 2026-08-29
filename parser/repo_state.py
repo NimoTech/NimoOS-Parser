@@ -2,7 +2,7 @@ import sqlite3
 import time
 
 
-_ALLOWED_DEVICES = ("auto", "cuda", "cpu")
+_ALLOWED_DEVICES = ("auto", "cuda", "gpu", "cpu")
 
 
 def get_state(conn: sqlite3.Connection) -> dict:

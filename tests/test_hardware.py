@@ -53,6 +53,7 @@ def test_has_nvidia_gpu_true_when_smi_and_torch_agree(monkeypatch):
 
 def test_resolve_device_auto_picks_cpu_when_no_usable_gpu(monkeypatch):
     monkeypatch.setattr("parser.hardware._has_nvidia_gpu", lambda: False)
+    monkeypatch.setattr("parser.hardware._has_openvino_gpu", lambda: False)
     assert resolve_device("auto") == "cpu"
 
 
@@ -61,3 +62,40 @@ def test_resolve_device_cuda_honored_even_without_gpu(monkeypatch):
     monkeypatch.setattr("parser.hardware._has_nvidia_gpu", lambda: False)
     assert resolve_device("cuda") == "cuda"
     assert resolve_device("cpu") == "cpu"
+
+
+import parser.hardware as hw
+
+
+def test_resolve_device_gpu_pref_returned_as_is(monkeypatch):
+    # 'gpu' is honoured even without probing (mirrors 'cuda' semantics:
+    # load surface raises/falls back, resolution does not second-guess).
+    assert hw.resolve_device("gpu") == "gpu"
+
+
+def test_resolve_device_auto_prefers_cuda_over_ov_gpu(monkeypatch):
+    monkeypatch.setattr(hw, "_has_nvidia_gpu", lambda: True)
+    monkeypatch.setattr(hw, "_has_openvino_gpu", lambda: True)
+    assert hw.resolve_device("auto") == "cuda"
+
+
+def test_resolve_device_auto_picks_ov_gpu_without_cuda(monkeypatch):
+    monkeypatch.setattr(hw, "_has_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(hw, "_has_openvino_gpu", lambda: True)
+    assert hw.resolve_device("auto") == "gpu"
+
+
+def test_resolve_device_auto_falls_back_to_cpu(monkeypatch):
+    monkeypatch.setattr(hw, "_has_nvidia_gpu", lambda: False)
+    monkeypatch.setattr(hw, "_has_openvino_gpu", lambda: False)
+    assert hw.resolve_device("auto") == "cpu"
+
+
+def test_has_openvino_gpu_swallows_exceptions(monkeypatch):
+    class Boom:
+        def __init__(self):
+            raise RuntimeError("no openvino")
+    monkeypatch.setattr(hw, "_openvino_core_factory", Boom)
+    hw._has_openvino_gpu.cache_clear()
+    assert hw._has_openvino_gpu() is False
+    hw._has_openvino_gpu.cache_clear()
