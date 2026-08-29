@@ -10,6 +10,8 @@ export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+sudo mkdir -p "$MODELS_DIR" && sudo chown "$(id -u):$(id -g)" "$MODELS_DIR"
+
 echo "==> conversion venv (python 3.11 + optimum[openvino] + torch-cpu)"
 uv venv "$WORK/venv" --python 3.11
 UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}" \

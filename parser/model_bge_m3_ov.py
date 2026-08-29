@@ -91,9 +91,14 @@ class BGEM3OV:
 
     def embed_text(self, texts: list[str]) -> list[dict]:
         out: list[dict] = []
-        with self._lock:
-            for start in range(0, len(texts), _BATCH_SIZE):
-                batch = texts[start:start + _BATCH_SIZE]
+        # Lock scoped to a single batch (not the whole texts list): a large
+        # document can be hundreds of batches, and this method runs inline on
+        # the event loop's threadpool worker - holding the lock across all of
+        # them would serialise unrelated requests for far longer than any one
+        # inference call takes.
+        for start in range(0, len(texts), _BATCH_SIZE):
+            batch = texts[start:start + _BATCH_SIZE]
+            with self._lock:
                 enc = self._tokenizer(
                     batch, padding=True, truncation=True,
                     max_length=_MAX_LENGTH, return_tensors="np")

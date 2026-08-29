@@ -68,6 +68,8 @@ _PATH_KEYS = {
     "VlmModelPath": "vlm_model_path",
     "VlmGgufModel": "vlm_gguf_model",
     "VlmGgufMmproj": "vlm_gguf_mmproj",
+    "TextEmbedOvPath": "text_embed_ov_path",
+    "TextRerankOvPath": "text_rerank_ov_path",
 }
 _STR_KEYS = {
     "QdrantUrl": "qdrant_url",

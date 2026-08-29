@@ -24,8 +24,13 @@ def get_bge_m3():
     return get_embedder(app_state.conn)
 
 
+# Deliberately a plain `def`, not `async def`: embedding runs the tokenizer +
+# OpenVINO/torch inference synchronously (same reasoning as routes/rerank.py -
+# see the comment there). As an `async def` it ran inline on the event loop
+# and froze the whole service for the call's duration; FastAPI runs a sync
+# handler in its threadpool instead, so the loop stays responsive.
 @router.post("/embed", response_model=EmbedResponse)
-async def embed(req: EmbedRequest) -> EmbedResponse:
+def embed(req: EmbedRequest) -> EmbedResponse:
     if req.model == "bge-m3":
         if req.input_type != "text":
             raise HTTPException(400, "bge-m3 only supports input_type=text")

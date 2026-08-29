@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from parser.hardware import resolve_device
 from parser.repo_state import get_state, set_paused, set_concurrency, set_device, set_ocr
+from parser.text_backend import gpu_is_broken
 
 router = APIRouter(prefix="/v1/parser/control", tags=["control"])
 
@@ -29,12 +30,23 @@ def _pool():
     return app_state.worker_pool
 
 
+def _resolved_device(device_pref: str) -> str:
+    """resolve_device(), downgraded to "cpu" if the text backend has
+    already hit an OV load failure this process - otherwise this would
+    keep reporting "gpu" after a fallback that silently degraded to CPU.
+    """
+    resolved = resolve_device(device_pref)
+    if resolved == "gpu" and gpu_is_broken():
+        return "cpu"
+    return resolved
+
+
 @router.get("/state")
 async def get_control_state() -> dict:
     s = get_state(_conn())
     # Expose what `auto` actually resolves to right now, so the UI can show
     # "Auto (cuda)" or "Auto (cpu)" without re-implementing the detection.
-    s["resolved_device"] = resolve_device(s["device"])
+    s["resolved_device"] = _resolved_device(s["device"])
     return s
 
 
@@ -93,5 +105,5 @@ async def set_pool_device(body: DeviceBody) -> dict:
     unload_all()
     return {
         "device": body.device,
-        "resolved_device": resolve_device(body.device),
+        "resolved_device": _resolved_device(body.device),
     }

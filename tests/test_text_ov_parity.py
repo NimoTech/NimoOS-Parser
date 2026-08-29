@@ -8,6 +8,14 @@ the HF-cached torch models), so it only runs when explicitly requested:
 Thresholds are the spec's acceptance bar (spec 2026-08-29 §6): dense cosine
 >= 0.999, identical sparse token-id sets with per-weight |delta| <= 0.01,
 rerank per-pair |delta| <= 0.01 with identical ordering.
+
+Real on-box invocation (service runs as root; the GPU is only visible to
+users with /dev/dri render-node access, so a plain-user run may silently
+see CPU-only and skip the OV code paths):
+
+    sudo env HF_HOME=/opt/nimoos-parser/hf-cache HF_HUB_OFFLINE=1 \\
+      PARSER_OV_PARITY=1 PYTHONPATH=<repo> \\
+      /opt/nimoos-parser/venv/bin/python -m pytest tests/test_text_ov_parity.py -v
 """
 import os
 
@@ -33,6 +41,9 @@ CANDIDATES = [
     {"id": "b", "text": "今天的天气很好,适合户外运动。"},
     {"id": "c", "text": "Residual connections add the input to the output."},
     {"id": "d", "text": "梯度下降是一种优化算法。"},
+    # Long enough that query + passage exceeds the reranker's 512-token
+    # max_length, exercising the truncation path (see model_reranker_ov.py).
+    {"id": "e", "text": "残差连接的原理说明。" * 120},
 ]
 
 

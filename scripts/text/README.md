@@ -13,6 +13,10 @@ Requirements: `uv` on PATH, network to a HF mirror (default hf-mirror.com;
 downloads are ~2.3 GB per model). optimum/torch never enter the runtime
 venv — they live in a throwaway venv for the duration of the script.
 
+The script `sudo mkdir -p`/`chown`s the default `MODELS_DIR`
+(`/opt/nimoos-parser/models`, owned by root) to the invoking user before
+exporting; set `MODELS_DIR` to a directory you already own to avoid sudo.
+
 Distribution note: shipping these IRs through the offline deps channel
 (install.sh) is deliberately out of scope for the first round; each box
 converts locally for now.
