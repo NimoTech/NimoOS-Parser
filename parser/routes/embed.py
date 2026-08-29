@@ -19,10 +19,9 @@ class EmbedResponse(BaseModel):
 
 
 def get_bge_m3():
-    from parser.device import current_device
     from parser.main import app_state
-    from parser.model_bge_m3 import BGEM3
-    return BGEM3.load(device=current_device(app_state.conn))
+    from parser.text_backend import get_embedder
+    return get_embedder(app_state.conn)
 
 
 @router.post("/embed", response_model=EmbedResponse)

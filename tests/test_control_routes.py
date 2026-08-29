@@ -94,3 +94,13 @@ def test_resume_is_idempotent(client):
     assert r.json() == {"paused": False}
     r = client.post("/v1/parser/control/resume")
     assert r.status_code == 200
+
+
+def test_set_device_gpu_accepted(client, monkeypatch):
+    import parser.hardware as hw
+    monkeypatch.setattr(hw, "_has_nvidia_gpu", lambda: False)
+    resp = client.post("/v1/parser/control/device", json={"device": "gpu"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["device"] == "gpu"
+    assert body["resolved_device"] == "gpu"

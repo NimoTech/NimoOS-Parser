@@ -12,7 +12,7 @@ class ConcurrencyBody(BaseModel):
 
 
 class DeviceBody(BaseModel):
-    device: str = Field(..., description="auto | cuda | cpu")
+    device: str = Field(..., description="auto | cuda | gpu | cpu")
 
 
 class OcrBody(BaseModel):
@@ -85,14 +85,12 @@ async def set_pool_device(body: DeviceBody) -> dict:
     model instances so the next embed/rerank request will reload on the
     new device. Reload itself is lazy (5-15s cold load on first request).
     """
-    if body.device not in ("auto", "cuda", "cpu"):
-        raise HTTPException(status_code=400, detail="device must be auto, cuda, or cpu")
+    if body.device not in ("auto", "cuda", "gpu", "cpu"):
+        raise HTTPException(status_code=400, detail="device must be auto, cuda, gpu, or cpu")
     set_device(_conn(), body.device)
     # Drop cached models so they reload on the new device next call.
-    from parser.model_bge_m3 import BGEM3
-    from parser.model_reranker import BGEReranker
-    BGEM3.unload()
-    BGEReranker.unload()
+    from parser.text_backend import unload_all
+    unload_all()
     return {
         "device": body.device,
         "resolved_device": resolve_device(body.device),
