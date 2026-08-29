@@ -43,6 +43,10 @@ class Settings:
     # visual pipeline: multimodal projector weight file for the GGUF path (paired with vlm_gguf_model)
     vlm_gguf_mmproj: Path = Path(
         "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/mmproj.gguf")
+    # text pipeline: bge-m3 OpenVINO IR dir (backbone + sparse_linear.npz), GPU-only text embedding backend
+    text_embed_ov_path: Path = Path("/opt/nimoos-parser/models/bge-m3-ov")
+    # text pipeline: bge-reranker-v2-m3 OpenVINO IR dir, GPU-only text reranking backend
+    text_rerank_ov_path: Path = Path("/opt/nimoos-parser/models/bge-reranker-v2-m3-ov")
 
 
 _INT_KEYS = {
@@ -105,3 +109,10 @@ def load_settings(conf_path: Path = DEFAULT_CONF) -> Settings:
             else:
                 setattr(s, name, val)
     return s
+
+
+# Module-level singleton for call sites that don't have access to app_state
+# (e.g. model loader classmethods like BGEM3OV.load()). Most of the app still
+# threads an explicit Settings instance via app_state/load_settings(); this is
+# additive, not a replacement for that pattern.
+settings = load_settings()
