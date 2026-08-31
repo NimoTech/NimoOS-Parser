@@ -43,6 +43,10 @@ class Settings:
     # visual pipeline: multimodal projector weight file for the GGUF path (paired with vlm_gguf_model)
     vlm_gguf_mmproj: Path = Path(
         "/opt/nimoos-parser/models/qwen3-vl-4b-gguf/mmproj.gguf")
+    # text pipeline: bge-m3 OpenVINO IR dir (backbone + sparse_linear.npz), GPU-only text embedding backend
+    text_embed_ov_path: Path = Path("/opt/nimoos-parser/models/bge-m3-ov")
+    # text pipeline: bge-reranker-v2-m3 OpenVINO IR dir, GPU-only text reranking backend
+    text_rerank_ov_path: Path = Path("/opt/nimoos-parser/models/bge-reranker-v2-m3-ov")
 
 
 _INT_KEYS = {
@@ -64,6 +68,8 @@ _PATH_KEYS = {
     "VlmModelPath": "vlm_model_path",
     "VlmGgufModel": "vlm_gguf_model",
     "VlmGgufMmproj": "vlm_gguf_mmproj",
+    "TextEmbedOvPath": "text_embed_ov_path",
+    "TextRerankOvPath": "text_rerank_ov_path",
 }
 _STR_KEYS = {
     "QdrantUrl": "qdrant_url",

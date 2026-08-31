@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 
 from parser.hardware import resolve_device
 from parser.repo_state import get_state, set_paused, set_concurrency, set_device, set_ocr
+from parser.text_backend import gpu_is_broken
 
 router = APIRouter(prefix="/v1/parser/control", tags=["control"])
 
@@ -12,7 +13,7 @@ class ConcurrencyBody(BaseModel):
 
 
 class DeviceBody(BaseModel):
-    device: str = Field(..., description="auto | cuda | cpu")
+    device: str = Field(..., description="auto | cuda | gpu | cpu")
 
 
 class OcrBody(BaseModel):
@@ -29,12 +30,23 @@ def _pool():
     return app_state.worker_pool
 
 
+def _resolved_device(device_pref: str) -> str:
+    """resolve_device(), downgraded to "cpu" if the text backend has
+    already hit an OV load failure this process - otherwise this would
+    keep reporting "gpu" after a fallback that silently degraded to CPU.
+    """
+    resolved = resolve_device(device_pref)
+    if resolved == "gpu" and gpu_is_broken():
+        return "cpu"
+    return resolved
+
+
 @router.get("/state")
 async def get_control_state() -> dict:
     s = get_state(_conn())
     # Expose what `auto` actually resolves to right now, so the UI can show
     # "Auto (cuda)" or "Auto (cpu)" without re-implementing the detection.
-    s["resolved_device"] = resolve_device(s["device"])
+    s["resolved_device"] = _resolved_device(s["device"])
     return s
 
 
@@ -85,15 +97,13 @@ async def set_pool_device(body: DeviceBody) -> dict:
     model instances so the next embed/rerank request will reload on the
     new device. Reload itself is lazy (5-15s cold load on first request).
     """
-    if body.device not in ("auto", "cuda", "cpu"):
-        raise HTTPException(status_code=400, detail="device must be auto, cuda, or cpu")
+    if body.device not in ("auto", "cuda", "gpu", "cpu"):
+        raise HTTPException(status_code=400, detail="device must be auto, cuda, gpu, or cpu")
     set_device(_conn(), body.device)
     # Drop cached models so they reload on the new device next call.
-    from parser.model_bge_m3 import BGEM3
-    from parser.model_reranker import BGEReranker
-    BGEM3.unload()
-    BGEReranker.unload()
+    from parser.text_backend import unload_all
+    unload_all()
     return {
         "device": body.device,
-        "resolved_device": resolve_device(body.device),
+        "resolved_device": _resolved_device(body.device),
     }

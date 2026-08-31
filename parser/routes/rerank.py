@@ -32,10 +32,9 @@ class RerankResponse(BaseModel):
 
 
 def get_reranker():
-    from parser.device import current_device
     from parser.main import app_state
-    from parser.model_reranker import BGEReranker
-    return BGEReranker.load(device=current_device(app_state.conn))
+    from parser.text_backend import get_reranker as _get_reranker
+    return _get_reranker(app_state.conn)
 
 
 # Deliberately a plain `def`, not `async def`: reranking is CPU-bound and

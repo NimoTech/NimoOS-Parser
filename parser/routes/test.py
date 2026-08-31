@@ -45,17 +45,15 @@ def _cos_sim(a: list[float], b: list[float]) -> float:
 
 
 def _get_bge():
-    from parser.device import current_device
     from parser.main import app_state
-    from parser.model_bge_m3 import BGEM3
-    return BGEM3.load(device=current_device(app_state.conn))
+    from parser.text_backend import get_embedder
+    return get_embedder(app_state.conn)
 
 
 def _get_reranker():
-    from parser.device import current_device
     from parser.main import app_state
-    from parser.model_reranker import BGEReranker
-    return BGEReranker.load(device=current_device(app_state.conn))
+    from parser.text_backend import get_reranker
+    return get_reranker(app_state.conn)
 
 
 @router.post("/analyze")

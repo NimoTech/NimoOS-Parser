@@ -1,3 +1,4 @@
+import functools
 import os
 import shutil
 import subprocess
@@ -53,6 +54,26 @@ def _has_nvidia_gpu() -> bool:
     return _torch_cuda_available()
 
 
+def _openvino_core_factory():
+    # Indirection point so tests can monkeypatch Core construction.
+    import openvino
+    return openvino.Core()
+
+
+@functools.lru_cache(maxsize=1)
+def _has_openvino_gpu() -> bool:
+    """Best-effort probe: is an OpenVINO GPU device visible?
+
+    Any failure (openvino missing, driver broken) returns False — a failed
+    probe must never take down resolution (same philosophy as backendselect).
+    Cached: device presence does not change within a process lifetime.
+    """
+    try:
+        return "GPU" in _openvino_core_factory().available_devices
+    except Exception:
+        return False
+
+
 def detect_profile() -> Profile:
     override = os.environ.get("PARSER_PROFILE", "").lower()
     if override in (p.value for p in Profile):
@@ -65,16 +86,22 @@ def detect_profile() -> Profile:
 
 
 def resolve_device(device_pref: str) -> str:
-    """Resolve a user device preference (auto|cuda|cpu) to an actual torch device.
+    """Resolve a user device preference (auto|cuda|gpu|cpu) to a device string.
 
-    'auto' picks 'cuda' if an NVIDIA GPU is present, else 'cpu'. 'cuda' and
-    'cpu' are returned as-is; 'cuda' is honoured even when no GPU is detected
-    so the model load surface raises a clean error instead of silently
-    downgrading.
+    'auto' picks 'cuda' if an NVIDIA GPU is present, else 'gpu' if an
+    OpenVINO GPU (Intel iGPU/dGPU) is visible, else 'cpu'. Explicit values
+    are returned as-is ('cuda'/'gpu' are honoured even when no device is
+    detected so the model load surface raises/falls back explicitly instead
+    of silently downgrading here). 'gpu' means OpenVINO GPU; torch paths
+    never receive it (see parser/text_backend.py).
     """
     pref = (device_pref or "auto").lower()
     if pref == "auto":
-        return "cuda" if _has_nvidia_gpu() else "cpu"
-    if pref in ("cuda", "cpu"):
+        if _has_nvidia_gpu():
+            return "cuda"
+        if _has_openvino_gpu():
+            return "gpu"
+        return "cpu"
+    if pref in ("cuda", "gpu", "cpu"):
         return pref
     raise ValueError(f"unknown device preference: {device_pref!r}")
