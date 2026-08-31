@@ -17,6 +17,19 @@ The script `sudo mkdir -p`/`chown`s the default `MODELS_DIR`
 (`/opt/nimoos-parser/models`, owned by root) to the invoking user before
 exporting; set `MODELS_DIR` to a directory you already own to avoid sudo.
 
-Distribution note: shipping these IRs through the offline deps channel
-(install.sh) is deliberately out of scope for the first round; each box
-converts locally for now.
+Distribution: fresh installs on Intel GPU machines get these IRs
+automatically — `install-parser.sh` (NimoOS-Build) downloads
+`deps/parser/bge-text-ov-fp16.tar.zst` from the deps channel, verifies its
+pinned sha256 and unpacks it into `/opt/nimoos-parser/models/`
+(`NIMO_PARSER_OV=0/1` skips/forces). Running `convert_bge.sh` locally is
+only needed on machines without that package, or to regenerate it.
+
+To republish the package after re-converting (e.g. a model update):
+
+```bash
+cd /opt/nimoos-parser/models
+tar --zstd -cf bge-text-ov-fp16.tar.zst bge-m3-ov bge-reranker-v2-m3-ov
+sha256sum bge-text-ov-fp16.tar.zst   # update DEP_TEXT_OV_SHA256 in install-parser.sh
+aws s3 cp bge-text-ov-fp16.tar.zst s3://nimoos-public/deps/parser/
+# overwriting the key requires a CloudFront invalidation of /deps/parser/*
+```
