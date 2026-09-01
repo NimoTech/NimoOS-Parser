@@ -80,6 +80,11 @@ class DoclingExtractor:
         return cls._instance
 
     @classmethod
+    def invalidate(cls) -> None:
+        """Drop the cached converter so the next load() rebuilds it."""
+        cls._instance = None
+
+    @classmethod
     def unload(cls) -> None:
         cls._instance = None
         try:

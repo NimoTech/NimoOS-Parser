@@ -85,6 +85,15 @@ async def set_pool_ocr(body: OcrBody) -> dict:
     pipeline. Unloads the cached extractor so the next ingest reloads
     with the new OCR setting.
     """
+    if body.enabled:
+        from parser import ocr_installer
+        from parser.repo_state import get_state as _gs
+        active = _gs(_conn())["ocr_model"]
+        if not active or not ocr_installer.is_installed(active):
+            raise HTTPException(
+                status_code=409,
+                detail="no OCR model installed; install and activate one "
+                       "under /v1/parser/ocr/models first")
     set_ocr(_conn(), body.enabled)
     from parser.docling_extractor import DoclingExtractor
     DoclingExtractor.unload()
