@@ -82,6 +82,9 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
     settings = load_settings()
     app_state.settings = settings
 
+    from parser import ocr_installer
+    ocr_installer.set_models_dir(settings.ocr_models_dir)
+
     settings.data_path.mkdir(parents=True, exist_ok=True)
     app_state.conn = init_db(settings.data_path / "parser.db")
     _register_active_models(app_state.conn)
