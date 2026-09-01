@@ -31,6 +31,12 @@ docling>=2.50
 # GPU OCR needs onnxruntime-gpu, but there's no wheel for CUDA 13.2 yet; waiting on ort 1.21+.
 rapidocr-onnxruntime>=1.4
 
+# OpenVINO build of onnxruntime: same module name as plain onnxruntime, so the
+# deploy script uninstalls the plain wheel and force-reinstalls this one last
+# (see NimoOS-Build/scripts/deploy-parser.sh). Provides OpenVINOExecutionProvider
+# for OCR-on-iGPU; plain-CPU machines are unaffected (EP simply degrades).
+onnxruntime-openvino>=1.24.1
+
 # ---- tests ----
 pytest>=8.0
 pytest-asyncio>=0.24
