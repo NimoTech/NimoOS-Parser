@@ -65,3 +65,35 @@ def test_ocr_enable_gated_on_installed_model(client):
     client.post("/v1/parser/ocr/models/ppocr-v4-mobile/activate")
     r = client.post("/v1/parser/control/ocr", json={"enabled": True})
     assert r.status_code == 200
+
+
+def test_list_unknown_profile_size_note_blank(client, monkeypatch):
+    def fake_entries():
+        return [{"id": "mystery", "name": "Mystery Model", "langs": "en",
+                 "profile": "quantum", "recommended": False, "files": {}}]
+
+    monkeypatch.setattr(ocr_models, "entries", fake_entries)
+    r = client.get("/v1/parser/ocr/models")
+    assert r.status_code == 200
+    row = next(m for m in r.json()["models"] if m["id"] == "mystery")
+    assert row["size_note"] == ""
+
+
+def test_activate_rolls_back_on_failure(client, monkeypatch):
+    _fake_install("ppocr-v4-mobile")
+
+    def boom(conn, model_id):
+        raise RuntimeError("boom")
+
+    strict_client = TestClient(client.app, raise_server_exceptions=False)
+    # Scoped to this `with` block so it doesn't also undo the `client`
+    # fixture's app_state.conn patch (both share the outer `monkeypatch`).
+    with monkeypatch.context() as m:
+        m.setattr(ocr_models, "set_ocr_model", boom)
+        r = strict_client.post("/v1/parser/ocr/models/ppocr-v4-mobile/activate")
+    assert r.status_code >= 500
+    from parser.main import app_state
+    assert app_state.conn.in_transaction is False
+
+    r2 = client.post("/v1/parser/ocr/models/ppocr-v4-mobile/activate")
+    assert r2.status_code == 200

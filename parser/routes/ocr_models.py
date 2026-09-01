@@ -27,7 +27,7 @@ async def list_models() -> dict:
         out.append({
             "id": e["id"], "name": e["name"], "langs": e["langs"],
             "profile": e["profile"], "recommended": e["recommended"],
-            "size_note": _SIZE_NOTES[e["profile"]],
+            "size_note": _SIZE_NOTES.get(e["profile"], ""),
             "installed": ocr_installer.is_installed(e["id"]),
             "active": e["id"] == active,
             "status": row.get("status", "idle"),
@@ -52,10 +52,14 @@ async def activate_model(model_id: str) -> dict:
     if not ocr_installer.is_installed(model_id):
         raise HTTPException(status_code=409, detail="model not installed")
     conn = get_conn()
-    register_model(conn, name=model_id, version=REGISTRY_TAG, modality="ocr",
-                   dim=None, registered_at=int(time.time() * 1000))
-    set_active(conn, model_id, REGISTRY_TAG)
-    set_ocr_model(conn, model_id)
+    try:
+        register_model(conn, name=model_id, version=REGISTRY_TAG, modality="ocr",
+                       dim=None, registered_at=int(time.time() * 1000))
+        set_active(conn, model_id, REGISTRY_TAG)
+        set_ocr_model(conn, model_id)
+    except Exception:
+        conn.rollback()
+        raise
     from parser.docling_extractor import DoclingExtractor
     DoclingExtractor.invalidate()
     return {"ocr_model": model_id}
