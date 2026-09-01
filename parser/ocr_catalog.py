@@ -23,18 +23,21 @@ _CATALOG = [
      "registry": {"det": ("PP-OCRv4", "det", "ch_PP-OCRv4_det_server"),
                   "rec": ("PP-OCRv4", "rec", "ch_PP-OCRv4_rec_server"),
                   "cls": ("PP-OCRv4", "cls", "ch_ppocr_mobile_v2.0_cls_mobile")}},
+    # v5's PP-LCNet textline cls models are shape-incompatible with rapidocr's
+    # explicit-path cls preprocessing (it always applies default v2.0-cls
+    # preprocessing regardless of which cls model is pointed at) — docling
+    # pins cls to the v4 mobile classifier for every OCR version anyway, so
+    # both v5 entries use it too (same choice as the v6 entry below).
     {"id": "ppocr-v5-mobile", "name": "PP-OCRv5 Mobile", "langs": "zh / en",
      "profile": "fast", "recommended": False,
      "registry": {"det": ("PP-OCRv5", "det", "ch_PP-OCRv5_det_mobile"),
                   "rec": ("PP-OCRv5", "rec", "ch_PP-OCRv5_rec_mobile"),
-                  "cls": ("PP-OCRv5", "cls",
-                          "ch_PP-LCNet_x0_25_textline_ori_cls_mobile")}},
+                  "cls": ("PP-OCRv4", "cls", "ch_ppocr_mobile_v2.0_cls_mobile")}},
     {"id": "ppocr-v5-server", "name": "PP-OCRv5 Server", "langs": "zh / en",
      "profile": "accurate", "recommended": False,
      "registry": {"det": ("PP-OCRv5", "det", "ch_PP-OCRv5_det_server"),
                   "rec": ("PP-OCRv5", "rec", "ch_PP-OCRv5_rec_server"),
-                  "cls": ("PP-OCRv5", "cls",
-                          "ch_PP-LCNet_x1_0_textline_ori_cls_server")}},
+                  "cls": ("PP-OCRv4", "cls", "ch_ppocr_mobile_v2.0_cls_mobile")}},
     # v6 rec/det are multilingual; v6 has no cls of its own — docling also
     # pins cls to the v4 mobile classifier for every version.
     {"id": "ppocr-v6-small", "name": "PP-OCRv6 Small", "langs": "multi (~52)",
