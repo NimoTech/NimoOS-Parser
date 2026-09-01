@@ -27,9 +27,19 @@ transformers>=4.44.2,<5
 docling>=2.50
 
 # ---- OCR (scanned docs / image-based PDFs) ----
-# CPU only for now; the wheel bundles 3 ONNX models and works offline.
-# GPU OCR needs onnxruntime-gpu, but there's no wheel for CUDA 13.2 yet; waiting on ort 1.21+.
+# Legacy inference wheel; bundles 3 ONNX models and works offline. OCR-on-GPU
+# no longer waits on an onnxruntime-gpu CUDA wheel: it goes through
+# onnxruntime-openvino's OpenVINO EP instead (see the comment block below),
+# which also covers Intel iGPU. Plain-CPU machines are unaffected either way.
 rapidocr-onnxruntime>=1.4
+
+# rapidocr v3's bundled model registry (default_models.yaml) is what
+# ocr_catalog.py reads for URLs/SHA256 of the switchable model sets, and PyYAML
+# parses that file; both imports are deferred to first use (see
+# ocr_catalog._registry), so a missing wheel only fails /ocr/models, not
+# service startup.
+rapidocr>=3.9,<4
+PyYAML>=6
 
 # OpenVINO build of onnxruntime: same module name as plain onnxruntime, so the
 # deploy script uninstalls the plain wheel and force-reinstalls this one last

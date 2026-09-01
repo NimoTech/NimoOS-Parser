@@ -8,9 +8,6 @@ one coherent model set, so a rapidocr upgrade re-pins every URL for free.
 """
 import functools
 
-import yaml
-from rapidocr.inference_engine.base import MODEL_URL_PATH
-
 # Registry tag recorded in model_versions on install (the rapidocr release
 # whose registry served the files).
 REGISTRY_TAG = "rapidocr-registry"
@@ -50,6 +47,11 @@ _CATALOG = [
 
 @functools.lru_cache(maxsize=1)
 def _registry() -> dict:
+    # Deferred import: rapidocr/PyYAML are optional at service-startup time,
+    # only required when the OCR model catalog is actually consulted.
+    import yaml
+    from rapidocr.inference_engine.base import MODEL_URL_PATH
+
     with open(MODEL_URL_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f)["onnxruntime"]
 
