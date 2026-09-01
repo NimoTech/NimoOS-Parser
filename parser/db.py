@@ -67,11 +67,12 @@ CREATE TABLE IF NOT EXISTS parser_state (
   concurrency INTEGER NOT NULL DEFAULT 2,
   device      TEXT NOT NULL DEFAULT 'auto',
   ocr_enabled INTEGER NOT NULL DEFAULT 0,
+  ocr_model   TEXT NOT NULL DEFAULT '',
   updated_at  INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO parser_state
-  (id, paused, concurrency, device, ocr_enabled, updated_at)
-VALUES (1, 0, 2, 'auto', 0, strftime('%s','now')*1000);
+  (id, paused, concurrency, device, ocr_enabled, ocr_model, updated_at)
+VALUES (1, 0, 2, 'auto', 0, '', strftime('%s','now')*1000);
 
 CREATE TABLE IF NOT EXISTS allowlist_extensions (
   ext TEXT PRIMARY KEY,
@@ -97,6 +98,9 @@ CREATE INDEX IF NOT EXISTS idx_allowlist_folders_root
 # list doesn't reference a column SQLite hasn't added yet.
 _MIGRATION_DEVICE = "ALTER TABLE parser_state ADD COLUMN device TEXT NOT NULL DEFAULT 'auto';"
 _MIGRATION_OCR = "ALTER TABLE parser_state ADD COLUMN ocr_enabled INTEGER NOT NULL DEFAULT 0;"
+_MIGRATION_OCR_MODEL = (
+    "ALTER TABLE parser_state ADD COLUMN ocr_model TEXT NOT NULL DEFAULT '';"
+)
 _MIGRATION_WIKI_CURSOR_SEQ = (
     "ALTER TABLE wiki_cursor ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;"
 )
@@ -123,6 +127,8 @@ def init_db(path: Path) -> sqlite3.Connection:
         conn.execute(_MIGRATION_DEVICE)
     if cols and "ocr_enabled" not in cols:
         conn.execute(_MIGRATION_OCR)
+    if cols and "ocr_model" not in cols:
+        conn.execute(_MIGRATION_OCR_MODEL)
     wc_cols = {
         r[1] for r in conn.execute("PRAGMA table_info(wiki_cursor)").fetchall()
     }
