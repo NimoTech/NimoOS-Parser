@@ -66,9 +66,15 @@ class DoclingExtractor:
             # context. force_full_page_ocr=False means docling first tries
             # native text extraction and only OCRs regions without text —
             # good for hybrid PDFs (native + scanned pages).
+            #
+            # lang codes are rapidocr v3's own short codes ("ch"/"en"), not the
+            # old rapidocr-onnxruntime names ("chinese_sim"/"english") — docling
+            # 2.123's rapidocr-v3 backend rejects the old names at converter init
+            # (ValueError: does not support language 'chinese_sim'), which upstream
+            # swallows into empty OCR text instead of surfacing the error.
             from parser.ocr_backend import set_gpu
             set_gpu(use_gpu)
-            kwargs = {"lang": ["chinese_sim", "english"],
+            kwargs = {"lang": ["ch", "en"],
                       "force_full_page_ocr": False}
             if model_dir is not None:
                 from parser.ocr_installer import FILE_NAMES
