@@ -38,7 +38,7 @@ class FakeDoclingExtractor:
     chunk_markdown's min_tokens=20 filter."""
     version = "docling/v1"
     @classmethod
-    def load(cls, *, ocr=False): return cls()
+    def load(cls, *, ocr=False, model_dir=None, use_gpu=False): return cls()
     def to_markdown(self, source):
         return ("# Converted Document\n\n"
                 "This is the markdown produced by docling from the .docx that "
@@ -74,7 +74,8 @@ def _patch_convert_and_docling(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "parser.docling_extractor.DoclingExtractor.load",
-        classmethod(lambda cls, *, ocr=False: FakeDoclingExtractor()),
+        classmethod(lambda cls, *, ocr=False, model_dir=None, use_gpu=False:
+                    FakeDoclingExtractor()),
     )
     # Intercept the cleanup so the fixture survives for inspection.
     import parser.pipeline_text as pt

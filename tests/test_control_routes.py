@@ -10,13 +10,31 @@ def test_get_state_default(client):
     assert body["ocr_enabled"] is False
 
 
-def test_set_ocr_toggles(client):
+def test_set_ocr_toggles(client, tmp_path):
+    from parser.main import app_state
+    from parser.ocr_installer import FILE_NAMES, model_dir, set_models_dir
+    from parser.repo_state import set_ocr_model
+
+    # enabling OCR with no installed/active model is gated
+    r = client.post("/v1/parser/control/ocr", json={"enabled": True})
+    assert r.status_code == 409
+
+    # fake-install + activate a model (same pattern as
+    # test_routes_ocr_models.py's _fake_install)
+    set_models_dir(tmp_path / "ocr")
+    d = model_dir("ppocr-v4-mobile")
+    d.mkdir(parents=True, exist_ok=True)
+    for name in FILE_NAMES.values():
+        (d / name).write_bytes(b"onnx")
+    set_ocr_model(app_state.conn, "ppocr-v4-mobile")
+
     r = client.post("/v1/parser/control/ocr", json={"enabled": True})
     assert r.status_code == 200
     assert r.json() == {"ocr_enabled": True}
     assert client.get("/v1/parser/control/state").json()["ocr_enabled"] is True
 
     r = client.post("/v1/parser/control/ocr", json={"enabled": False})
+    assert r.status_code == 200
     assert r.json() == {"ocr_enabled": False}
 
 

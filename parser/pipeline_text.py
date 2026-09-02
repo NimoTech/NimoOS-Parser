@@ -10,6 +10,7 @@ from typing import Iterable
 log = logging.getLogger("parser.pipeline_text")
 
 from parser.chunk_text import chunk_markdown, chunk_plain, chunk_source
+from parser.ocr_state import resolve_ocr
 from parser.pipeline_base import IdentityResolver, ResolveOutcome
 from parser.repo_records import (
     upsert_file_record, get_file_record,
@@ -98,12 +99,12 @@ class TextPipeline:
             # UTF-8-decode the raw OLE bytes, that produces mojibake which
             # the old code put into Qdrant.
             from parser.legacy_office_extractor import convert_legacy
-            from parser.repo_state import get_state
-            ocr = get_state(self.conn).get("ocr_enabled", False)
+            ocr, ocr_dir, ocr_gpu = resolve_ocr(self.conn)
             try:
                 converted = convert_legacy(path)
                 try:
-                    text = DoclingExtractor.load(ocr=ocr).to_markdown(
+                    text = DoclingExtractor.load(
+                        ocr=ocr, model_dir=ocr_dir, use_gpu=ocr_gpu).to_markdown(
                         str(converted))
                     chunks = chunk_markdown(text, min_tokens=20)
                     mime = (f"text/markdown+libreoffice-docling/"
@@ -122,10 +123,10 @@ class TextPipeline:
             # PDF/DOCX/PPTX/XLSX/HTML → docling → markdown → chunk_markdown.
             # OCR toggled via parser_state.ocr_enabled — same singleton
             # extractor reloads on change.
-            from parser.repo_state import get_state
-            ocr = get_state(self.conn).get("ocr_enabled", False)
+            ocr, ocr_dir, ocr_gpu = resolve_ocr(self.conn)
             try:
-                text = DoclingExtractor.load(ocr=ocr).to_markdown(path)
+                text = DoclingExtractor.load(
+                    ocr=ocr, model_dir=ocr_dir, use_gpu=ocr_gpu).to_markdown(path)
                 chunks = chunk_markdown(text, min_tokens=20)
                 mime = f"text/markdown+docling/{ext.lstrip('.')}"
             except Exception as exc:

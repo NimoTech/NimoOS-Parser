@@ -7,7 +7,7 @@ _ALLOWED_DEVICES = ("auto", "cuda", "gpu", "cpu")
 
 def get_state(conn: sqlite3.Connection) -> dict:
     row = conn.execute(
-        "SELECT paused, concurrency, device, ocr_enabled FROM parser_state WHERE id = 1"
+        "SELECT paused, concurrency, device, ocr_enabled, ocr_model FROM parser_state WHERE id = 1"
     ).fetchone()
     if row is None:
         raise RuntimeError(
@@ -18,6 +18,7 @@ def get_state(conn: sqlite3.Connection) -> dict:
         "concurrency": int(row[1]),
         "device": str(row[2]),
         "ocr_enabled": bool(row[3]),
+        "ocr_model": str(row[4]),
     }
 
 
@@ -39,6 +40,15 @@ def set_ocr(conn: sqlite3.Connection, enabled: bool) -> None:
     conn.execute(
         "UPDATE parser_state SET ocr_enabled = ?, updated_at = ? WHERE id = 1",
         (1 if enabled else 0, now_ms),
+    )
+    conn.commit()
+
+
+def set_ocr_model(conn: sqlite3.Connection, model_id: str) -> None:
+    now_ms = int(time.time() * 1000)
+    conn.execute(
+        "UPDATE parser_state SET ocr_model = ?, updated_at = ? WHERE id = 1",
+        (model_id, now_ms),
     )
     conn.commit()
 

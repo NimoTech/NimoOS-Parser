@@ -35,7 +35,7 @@ class DoclingExtractor:
     """Singleton wrapping docling's DocumentConverter."""
 
     _instance: Optional["DoclingExtractor"] = None
-    _ocr_enabled: bool = False
+    _load_key: tuple = (False, None, False)
     version = "docling/v1"
 
     def __init__(self, converter, ocr: bool) -> None:
@@ -43,8 +43,9 @@ class DoclingExtractor:
         self._ocr = ocr
 
     @classmethod
-    def load(cls, *, ocr: bool = False) -> "DoclingExtractor":
-        if cls._instance is not None and cls._ocr_enabled == ocr:
+    def load(cls, *, ocr: bool = False, model_dir: str | None = None,
+              use_gpu: bool = False) -> "DoclingExtractor":
+        if cls._instance is not None and cls._load_key == (ocr, model_dir, use_gpu):
             return cls._instance
         cls.unload()
 
@@ -65,10 +66,25 @@ class DoclingExtractor:
             # context. force_full_page_ocr=False means docling first tries
             # native text extraction and only OCRs regions without text —
             # good for hybrid PDFs (native + scanned pages).
-            pdf_opts.ocr_options = RapidOcrOptions(
-                lang=["chinese_sim", "english"],
-                force_full_page_ocr=False,
-            )
+            #
+            # lang codes are rapidocr v3's own short codes ("ch"/"en"), not the
+            # old rapidocr-onnxruntime names ("chinese_sim"/"english") — docling
+            # 2.123's rapidocr-v3 backend rejects the old names at converter init
+            # (ValueError: does not support language 'chinese_sim'), which upstream
+            # swallows into empty OCR text instead of surfacing the error.
+            from parser.ocr_backend import set_gpu
+            set_gpu(use_gpu)
+            kwargs = {"lang": ["ch", "en"],
+                      "force_full_page_ocr": False}
+            if model_dir is not None:
+                from parser.ocr_installer import FILE_NAMES
+                base = Path(model_dir)
+                kwargs.update(
+                    det_model_path=str(base / FILE_NAMES["det"]),
+                    rec_model_path=str(base / FILE_NAMES["rec"]),
+                    cls_model_path=str(base / FILE_NAMES["cls"]),
+                )
+            pdf_opts.ocr_options = RapidOcrOptions(**kwargs)
 
         converter = DocumentConverter(
             format_options={
@@ -76,8 +92,13 @@ class DoclingExtractor:
             },
         )
         cls._instance = cls(converter, ocr)
-        cls._ocr_enabled = ocr
+        cls._load_key = (ocr, model_dir, use_gpu)
         return cls._instance
+
+    @classmethod
+    def invalidate(cls) -> None:
+        """Drop the cached converter so the next load() rebuilds it."""
+        cls._instance = None
 
     @classmethod
     def unload(cls) -> None:

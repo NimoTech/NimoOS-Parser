@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI
 
 from parser.config import PARSER_APP_VERSION
-from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, notes, rerank, render, rescan, stats, test as test_routes, version, visual
+from parser.routes import agent_memory, allowlist, control, embed, extract, files, files_reindex, folders, health, jobs, models, notes, ocr_models, rerank, render, rescan, stats, test as test_routes, version, visual
 
 log = logging.getLogger("parser.main")
 
@@ -81,6 +81,9 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
 
     settings = load_settings()
     app_state.settings = settings
+
+    from parser import ocr_installer
+    ocr_installer.set_models_dir(settings.ocr_models_dir)
 
     settings.data_path.mkdir(parents=True, exist_ok=True)
     app_state.conn = init_db(settings.data_path / "parser.db")
@@ -307,6 +310,7 @@ def create_app(*, skip_workers: bool = False) -> FastAPI:
     app.include_router(notes.router)
     app.include_router(allowlist.router)
     app.include_router(control.router)
+    app.include_router(ocr_models.router)
     app.include_router(embed.router)
     app.include_router(files.router)
     app.include_router(files_reindex.router)

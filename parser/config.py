@@ -47,6 +47,8 @@ class Settings:
     text_embed_ov_path: Path = Path("/opt/nimoos-parser/models/bge-m3-ov")
     # text pipeline: bge-reranker-v2-m3 OpenVINO IR dir, GPU-only text reranking backend
     text_rerank_ov_path: Path = Path("/opt/nimoos-parser/models/bge-reranker-v2-m3-ov")
+    # OCR pipeline: switchable OCR model sets, one subdir per model id (det/rec/cls.onnx)
+    ocr_models_dir: Path = Path("/opt/nimoos-parser/models/ocr")
 
 
 _INT_KEYS = {
@@ -70,6 +72,7 @@ _PATH_KEYS = {
     "VlmGgufMmproj": "vlm_gguf_mmproj",
     "TextEmbedOvPath": "text_embed_ov_path",
     "TextRerankOvPath": "text_rerank_ov_path",
+    "OcrModelsDir": "ocr_models_dir",
 }
 _STR_KEYS = {
     "QdrantUrl": "qdrant_url",
