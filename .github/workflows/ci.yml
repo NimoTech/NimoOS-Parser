@@ -43,7 +43,12 @@ jobs:
           pip install \
             "fastapi" "httpx" "pydantic>=2.7" "python-multipart" \
             "qdrant-client" \
+            "PyYAML>=6" "rapidocr>=3.9,<4" \
             "pytest" "pytest-asyncio" "pytest-httpx"
+        # PyYAML + rapidocr: ocr_catalog resolves entries against rapidocr's
+        # bundled registry, and the OCR backend tests patch its onnxruntime
+        # ProviderConfig (rapidocr pulls onnxruntime + omegaconf itself).
+        # Still no docling/torch — rapidocr is tens of MB, not gigabytes.
 
       # Every skip below is named and explained, so a red run always means
       # something is genuinely broken.
