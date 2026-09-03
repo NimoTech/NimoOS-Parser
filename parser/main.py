@@ -147,6 +147,19 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
         # If user had paused the parser in a previous session, apply it now.
         if _state["paused"]:
             await app_state.worker_pool.pause()
+        # Files indexed by an older PARSER_VERSION get a low-priority
+        # re-index so a chunking/payload change actually reaches the whole
+        # corpus (incremental, paced by the worker pool — never a manual
+        # collection wipe).
+        try:
+            from parser.service_reindex import enqueue_version_drift
+            await asyncio.to_thread(
+                enqueue_version_drift, app_state.conn,
+                parser_version=settings.parser_version,
+                now_ms=int(time.time() * 1000),
+            )
+        except Exception:
+            log.exception("parser_version drift sweep failed; continuing")
 
     if app_state.wiki_client is not None:
         app_state.consumer = WikiConsumer(

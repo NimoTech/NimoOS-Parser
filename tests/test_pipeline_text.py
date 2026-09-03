@@ -111,3 +111,28 @@ def test_pipeline_orphans_old_on_modify(setup):
     # old file_id must have been tombstoned (not deleted)
     tombstone_ops = [op for op in qstore.payload_sets if op[0] == "tombstone"]
     assert len(tombstone_ops) == 1
+
+
+def test_pipeline_payload_carries_section_and_parent_id(setup):
+    """Search merges sibling chunks back into their section (item C); the
+    payload must therefore say which section a chunk belongs to and give a
+    parent id that is identical for every chunk of that section and stable
+    across re-indexes of the same file."""
+    conn, qstore, bge, tmp_path = setup
+    body = "\n\n".join("paragraph %d %s" % (i, "word " * 60) for i in range(30))
+    p = tmp_path / "doc.md"
+    p.write_text("lead paragraph before any heading, long enough to pass the min_tokens gate the pipeline applies to every chunk. " * 2 + "\n\n# Big\n\n" + body,
+                 encoding="utf-8")
+    pipe = TextPipeline(conn, qstore=qstore, embedder=bge, parser_version="parser/0.3.0")
+    pipe.index_file(root_id="root1", path=str(p), now_ms=100)
+    payloads = [u["payload"] for u in qstore.upserts]
+    assert len(payloads) > 2
+    for pl in payloads:
+        assert "parent_id" in pl and "section" in pl and "section_no" in pl, pl.keys()
+    lead = [pl for pl in payloads if pl["section"] == ""]
+    big = [pl for pl in payloads if pl["section"] == "Big"]
+    assert len(lead) == 1 and len(big) > 1
+    assert len({pl["parent_id"] for pl in big}) == 1, "all chunks of one section share a parent"
+    assert lead[0]["parent_id"] != big[0]["parent_id"]
+    fid = payloads[0]["file_id"]
+    assert big[0]["parent_id"] == str(uuid.uuid5(uuid.NAMESPACE_OID, f"{fid}:section:{big[0]['section_no']}"))
