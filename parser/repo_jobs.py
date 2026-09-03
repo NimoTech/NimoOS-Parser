@@ -1,5 +1,14 @@
+import contextlib
 import sqlite3
 from typing import Optional
+
+
+def _txn_lock(conn: sqlite3.Connection):
+    """Hold the connection's process-wide lock (db.LockedConnection) across a
+    multi-statement transaction so no other thread's statement lands between
+    BEGIN and COMMIT. Plain connections (tests) get a no-op."""
+    lock = getattr(conn, "lock", None)
+    return lock if lock is not None else contextlib.nullcontext()
 
 
 def enqueue_job(
@@ -21,37 +30,38 @@ def enqueue_job(
 def dequeue_job(
     conn: sqlite3.Connection, *, lease_s: int, now_ms: int,
 ) -> Optional[sqlite3.Row]:
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        row = conn.execute(
-            """
-            SELECT * FROM parse_jobs
-            WHERE done_at IS NULL
-              AND (locked_until IS NULL OR locked_until < ?)
-            ORDER BY priority ASC, id ASC
-            LIMIT 1
-            """,
-            (now_ms,),
-        ).fetchone()
-        if row is None:
+    with _txn_lock(conn):
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                """
+                SELECT * FROM parse_jobs
+                WHERE done_at IS NULL
+                  AND (locked_until IS NULL OR locked_until < ?)
+                ORDER BY priority ASC, id ASC
+                LIMIT 1
+                """,
+                (now_ms,),
+            ).fetchone()
+            if row is None:
+                conn.execute("COMMIT")
+                return None
+            conn.execute(
+                """
+                UPDATE parse_jobs
+                SET locked_until = ?, picked_at = COALESCE(picked_at, ?),
+                    attempts = attempts + 1
+                WHERE id = ?
+                """,
+                (now_ms + lease_s * 1000, now_ms, row["id"]),
+            )
             conn.execute("COMMIT")
-            return None
-        conn.execute(
-            """
-            UPDATE parse_jobs
-            SET locked_until = ?, picked_at = COALESCE(picked_at, ?),
-                attempts = attempts + 1
-            WHERE id = ?
-            """,
-            (now_ms + lease_s * 1000, now_ms, row["id"]),
-        )
-        conn.execute("COMMIT")
-        return conn.execute(
-            "SELECT * FROM parse_jobs WHERE id = ?", (row["id"],)
-        ).fetchone()
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+            return conn.execute(
+                "SELECT * FROM parse_jobs WHERE id = ?", (row["id"],)
+            ).fetchone()
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
 
 
 def complete_job(conn: sqlite3.Connection, job_id: int, now_ms: int) -> None:

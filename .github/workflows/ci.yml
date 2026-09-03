@@ -64,13 +64,9 @@ jobs:
       #                                also returns device, resolved_device and
       #                                ocr_enabled; the assertion was never
       #                                updated. Fix it and drop this line.
-      #   test_scale_down_finishes_... genuinely flaky: 1 failure in 8 runs in
-      #                                isolation. Deselected rather than papered
-      #                                over with --reruns, because a retry flag
-      #                                would hide every future flake too, and a
-      #                                CI that is red one run in eight is a CI
-      #                                people learn to ignore. It covers a real
-      #                                concurrency path and deserves a fix.
+      #   (test_scale_down_finishes_... used to be deselected as flaky; the
+      #    flake was the shared sqlite3 connection racing between worker
+      #    threads — fixed by db.LockedConnection, 10/10 green since.)
       #
       # Everything else runs: 312 passed, 7 skipped as of this commit.
       - name: Test
@@ -78,8 +74,7 @@ jobs:
           pytest tests/ -q \
             --ignore=tests/test_routes_extract.py \
             --ignore=tests/test_lifespan_full.py \
-            --deselect 'tests/test_lifespan_restore_state.py::test_startup_restores_paused_and_concurrency' \
-            --deselect 'tests/test_workers_concurrency.py::test_scale_down_finishes_in_flight_job_cleanly'
+            --deselect 'tests/test_lifespan_restore_state.py::test_startup_restores_paused_and_concurrency'
 
   # The document-conversion path is the point of this service, and the job
   # above cannot see it: it needs docling, the embedding model and a reachable
