@@ -87,3 +87,12 @@ def test_init_db_migration_is_idempotent():
         p = Path(td) / "p.db"
         init_db(p)
         init_db(p)  # second call, the key point - re-adding an ALTER column must not raise
+
+
+def test_init_db_keeps_temp_store_off_the_heap(tmp_path):
+    # temp_store=MEMORY (2) puts sort/group-by temp b-trees on the heap; with
+    # large parse_jobs/file_events-style tables that is unbounded RSS growth
+    # (the Wiki file_events incident). Default (0) lets SQLite spill to disk.
+    conn = init_db(tmp_path / "p.db")
+    temp_store = conn.execute("PRAGMA temp_store").fetchone()[0]
+    assert temp_store != 2
