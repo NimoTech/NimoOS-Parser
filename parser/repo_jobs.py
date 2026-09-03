@@ -64,6 +64,17 @@ def dequeue_job(
             raise
 
 
+def renew_lease(conn: sqlite3.Connection, *, job_id: int, lease_s: int,
+                now_ms: int) -> None:
+    """Extend an in-flight job's lease. Called periodically by the worker
+    while it processes the job so a long file (large document, slow model)
+    is never re-picked by another worker mid-flight."""
+    conn.execute(
+        "UPDATE parse_jobs SET locked_until = ? WHERE id = ? AND done_at IS NULL",
+        (now_ms + lease_s * 1000, job_id),
+    )
+
+
 def complete_job(conn: sqlite3.Connection, job_id: int, now_ms: int) -> None:
     conn.execute(
         "UPDATE parse_jobs SET done_at = ?, locked_until = NULL WHERE id = ?",

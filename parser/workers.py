@@ -7,7 +7,7 @@ import time
 from typing import Optional
 
 from parser import pacing
-from parser.repo_jobs import dequeue_job, complete_job, fail_job
+from parser.repo_jobs import dequeue_job, complete_job, fail_job, renew_lease
 from parser.repo_records import set_last_error
 
 log = logging.getLogger("parser.workers")
@@ -171,7 +171,7 @@ class WorkerPool:
                 await self._interruptible_sleep(self.idle_sleep_s, exit_flag)
                 continue
             try:
-                await asyncio.to_thread(self._process, job)
+                await self._process_with_lease(job)
                 await asyncio.to_thread(
                     complete_job, self.conn, job["id"],
                     int(time.time() * 1000),
@@ -240,6 +240,36 @@ class WorkerPool:
             return json.loads(row["modalities_done"])
         except (ValueError, TypeError):
             return None
+
+    async def _process_with_lease(self, job: sqlite3.Row) -> None:
+        """Run _process in a thread while a heartbeat keeps the job's lease
+        alive. Without it a file that takes longer than lease_s was re-picked
+        by another worker while still being processed (duplicate CPU and
+        upserts, attempts climbing to max_attempts for no failure)."""
+        interval = max(self.lease_s / 3.0, 0.2)
+        stop = asyncio.Event()
+
+        async def heartbeat() -> None:
+            while not stop.is_set():
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=interval)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    await asyncio.to_thread(
+                        renew_lease, self.conn, job_id=job["id"],
+                        lease_s=self.lease_s, now_ms=int(time.time() * 1000),
+                    )
+                except Exception:
+                    log.warning("lease renew failed for job %s", job["id"], exc_info=True)
+
+        hb = asyncio.create_task(heartbeat())
+        try:
+            await asyncio.to_thread(self._process, job)
+        finally:
+            stop.set()
+            await hb
 
     def _process(self, job: sqlite3.Row) -> None:
         op = job["op"]

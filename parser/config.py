@@ -27,7 +27,7 @@ class Settings:
     wiki_poll_limit: int = 200
     job_lease_s: int = 300
     # Per-file size cap for text indexing (bytes); see TextPipeline.
-    max_file_bytes: int = 16 * 1024 * 1024
+    max_file_bytes: int = 4 * 1024 * 1024
     worker_text_concurrency: int = 2
     tombstone_grace_hours: int = 24
     gc_interval_s: int = 6 * 3600

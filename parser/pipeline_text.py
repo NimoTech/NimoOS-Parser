@@ -30,7 +30,9 @@ class TextPipeline:
     # plain-text branches read the whole file into RAM, and a 941 MB
     # nimoos_panic.log pinned a worker for so long on 143 that its lease
     # expired and other workers re-picked the same file (audit P4/P5).
-    DEFAULT_MAX_FILE_BYTES = 16 * 1024 * 1024
+    # 4 MB ≈ 1M tokens ≈ 1700 chunks — already many minutes of embedding on
+    # an iGPU; text above that is a data dump (log/csv/json), not a document.
+    DEFAULT_MAX_FILE_BYTES = 4 * 1024 * 1024
 
     def __init__(self, conn: sqlite3.Connection, *, qstore, embedder,
                  parser_version: str,
