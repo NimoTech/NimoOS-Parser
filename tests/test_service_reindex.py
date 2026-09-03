@@ -244,3 +244,21 @@ def test_enqueue_version_drift_skips_tombstoned(tmp_path):
     _seed_versioned(conn, "old1", "/DATA/a.md", "parser/0.2.0")
     set_tombstone(conn, file_id="old1", at_ms=5)
     assert enqueue_version_drift(conn, parser_version="parser/0.3.0", now_ms=1000) == 0
+
+
+def test_enqueue_version_drift_skips_paths_no_longer_indexable(tmp_path):
+    # Legacy records under a container dir (indexed before the gate existed)
+    # or with a since-disabled extension must not be resurrected by a
+    # PARSER_VERSION bump — the drift sweep is not an ingest bypass.
+    from parser import repo_allowlist
+    from parser.db import init_db
+    from parser.repo_jobs import list_jobs
+    from parser.service_reindex import enqueue_version_drift
+    conn = init_db(tmp_path / "p.db")
+    _seed_versioned(conn, "sys", "/DATA/.system_data/home/nimo/.claude.json", "parser/0.2.0")
+    _seed_versioned(conn, "ok", "/DATA/a.md", "parser/0.2.0")
+    _seed_versioned(conn, "off", "/DATA/b.pdf", "parser/0.2.0")
+    repo_allowlist.set_extension_enabled(conn, ".pdf", False)
+    n = enqueue_version_drift(conn, parser_version="parser/0.3.0", now_ms=1000)
+    assert n == 1
+    assert [j["path"] for j in list_jobs(conn, status="pending", limit=10)] == ["/DATA/a.md"]

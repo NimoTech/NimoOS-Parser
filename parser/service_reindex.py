@@ -13,6 +13,7 @@ import logging
 import sqlite3
 from typing import Optional
 
+from parser.repo_allowlist import is_path_indexable
 from parser.repo_jobs import enqueue_job
 from parser.repo_records import (
     get_file_record, list_paths_for_file, set_tombstone,
@@ -40,7 +41,10 @@ def enqueue_version_drift(
     in IdentityResolver only fires when a file is next touched, so without
     this sweep untouched files kept serving old-schema chunks indefinitely.
     Idempotent — a path that already has an open job is skipped, so a
-    restart mid-sweep does not double-queue. Returns the number of jobs
+    restart mid-sweep does not double-queue. Paths that are no longer
+    indexable (container dir, disabled extension, deny rule) are skipped
+    too: the sweep must not resurrect records the ingest gate would refuse;
+    the allowlist sweep retires those instead. Returns the number of jobs
     enqueued. No tombstoning: index_file resolves the drift itself and
     replaces the file's vectors atomically.
     """
@@ -56,6 +60,8 @@ def enqueue_version_drift(
     ).fetchall()
     queued = 0
     for r in rows:
+        if not is_path_indexable(conn, root_id=r["root_id"], path=r["path"]):
+            continue
         open_job = conn.execute(
             "SELECT 1 FROM parse_jobs WHERE root_id = ? AND path = ? "
             "AND done_at IS NULL LIMIT 1",

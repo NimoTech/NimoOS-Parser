@@ -76,3 +76,18 @@ async def test_sweep_keeps_files_still_indexable(conn):
     affected = await tombstone_task.sweep_once(conn, qstore=qstore, now_ms=1)
     assert affected == 0
     qstore.tombstone_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sweep_tombstones_records_under_container_dirs(conn):
+    # allowed extension, but the path sits under /DATA/.system_data — the
+    # startup sweep is what retires records indexed before the gate existed.
+    _seed_file_record(conn, file_id="sys", root_id="r1",
+                       path="/DATA/.system_data/home/nimo/.claude/cache/changelog.md",
+                       mime="text/markdown")
+    _seed_file_record(conn, file_id="ok", root_id="r1",
+                       path="/DATA/Documents/changelog.md", mime="text/markdown")
+    qstore = MagicMock()
+    affected = await tombstone_task.sweep_once(conn, qstore=qstore, now_ms=999)
+    assert affected == 1
+    qstore.tombstone_file.assert_called_once_with(file_id="sys", tombstoned_at=999)

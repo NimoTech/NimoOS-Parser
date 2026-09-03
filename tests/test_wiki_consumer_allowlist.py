@@ -40,3 +40,17 @@ def test_unknown_ext_skipped(conn):
 def test_no_extension_skipped(conn):
     ev = {"op": "create", "path": "/Makefile", "is_dir": False}
     assert _op_for_event(ev, conn) is None
+
+
+def test_index_event_under_container_dir_is_skipped(conn):
+    # .md is an allowed extension, but nothing under .system_data is indexable
+    ev = {"op": "create", "root_id": "r1",
+          "path": "/DATA/.system_data/home/nimo/.claude/cache/changelog.md"}
+    assert _op_for_event(ev, conn) is None
+
+
+def test_delete_event_under_container_dir_still_passes(conn):
+    # deletes must still flow so stale vectors get cleaned up
+    ev = {"op": "delete", "root_id": "r1",
+          "path": "/DATA/.system_data/home/nimo/.claude.json"}
+    assert _op_for_event(ev, conn) == "delete"

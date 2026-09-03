@@ -178,6 +178,10 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
     app_state.tombstone_task = asyncio.create_task(
         worker_loop(app_state.conn, app_state.qstore, app_state.tombstone_wake)
     )
+    # Sweep once at startup: records that predate a gate change (container
+    # dirs, disabled extensions) are retired here rather than lingering as
+    # searchable stale vectors until the next allowlist edit.
+    app_state.tombstone_wake.set()
 
 
 async def _gc_loop(settings) -> None:

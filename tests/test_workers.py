@@ -286,3 +286,28 @@ async def test_pacing_sleep_interruptible_by_exit_flag():
     t = asyncio.get_event_loop().time()
     await asyncio.gather(pool._interruptible_sleep(30.0, flag), trip())
     assert asyncio.get_event_loop().time() - t < 5.0
+
+
+def test_worker_refuses_index_jobs_under_container_dirs(conn):
+    # Defense in depth: even if a job for a gated path is already queued
+    # (legacy queue, older enqueue path), the worker must not parse it.
+    enqueue_job(conn, root_id="r", path="/DATA/.system_data/home/nimo/.claude.json",
+                op="reindex", priority=100, now_ms=100)
+    enqueue_job(conn, root_id="r", path="/DATA/Documents/a.md", op="index",
+                priority=100, now_ms=100)
+    pipe = FakePipeline()
+    pool = WorkerPool(conn, text_pipeline=pipe, concurrency=1, lease_s=10,
+                      idle_sleep_s=0.01)
+
+    async def runner():
+        await pool.start()
+        for _ in range(400):  # both jobs done (pacing may sleep between them)
+            if not list_jobs(conn, status="pending", limit=10) and \
+               not list_jobs(conn, status="running", limit=10):
+                break
+            await asyncio.sleep(0.05)
+        await pool.stop()
+
+    asyncio.run(runner())
+    assert pipe.calls == [("r", "/DATA/Documents/a.md")]
+    assert list_jobs(conn, status="failed", limit=10) == []

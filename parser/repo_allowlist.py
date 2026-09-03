@@ -10,6 +10,8 @@ import sqlite3
 import time
 import uuid
 
+from parser.pathgate import has_container_ancestor
+
 
 def list_extensions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(conn.execute(
@@ -65,9 +67,13 @@ def is_path_indexable(conn: sqlite3.Connection, *, root_id: str,
                       path: str) -> bool:
     """Single source of truth for "should this (root_id, path) be indexed".
 
-    Priority: explicit deny > explicit allow > extension check.
-    Folder rules only apply within their own root_id.
+    Priority: container-dir gate > explicit deny > explicit allow > extension
+    check. The container-dir gate (parser.pathgate) is not configurable and
+    beats an explicit allow rule. Folder rules only apply within their own
+    root_id.
     """
+    if has_container_ancestor(path):
+        return False
     ext = posixpath.splitext(path)[1].lower()
 
     # Folder rules first — deny has the highest priority
