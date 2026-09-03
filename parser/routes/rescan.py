@@ -3,6 +3,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from parser.repo_allowlist import is_path_indexable
 from parser.repo_jobs import enqueue_job
 from parser.repo_records import list_paths_under_root
 
@@ -32,10 +33,14 @@ async def rescan(req: RescanRequest) -> dict:
         conn = get_conn()
         rows = list_paths_under_root(conn, req.root_id)
         now = int(time.time() * 1000)
+        queued = 0
         for r in rows:
+            if not is_path_indexable(conn, root_id=r["root_id"], path=r["path"]):
+                continue
             enqueue_job(conn, root_id=r["root_id"], path=r["path"],
                         op="reindex", priority=500, now_ms=now)
-        return {"queued": len(rows)}
+            queued += 1
+        return {"queued": queued}
     if req.op == "verify":
         raise HTTPException(
             501, "op='verify' is not implemented; use op='reindex' for now"

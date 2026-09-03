@@ -110,3 +110,25 @@ def test_skip_workers_does_not_start_worker_pool(tmp_path, monkeypatch):
         assert app_state.qstore is None
         assert app_state.consumer is None
         assert app_state.worker_pool is None
+
+
+def test_full_lifecycle_runs_allowlist_sweep_once_at_startup(tmp_path, monkeypatch):
+    # Records indexed before a gate change (container dirs, disabled
+    # extensions) must be retired on boot, not only on the next allowlist edit.
+    _set_env(monkeypatch, tmp_path)
+    from parser import tombstone_task
+    calls = []
+
+    async def fake_sweep(conn, *, qstore, now_ms=None):
+        calls.append(qstore)
+        return 0
+
+    monkeypatch.setattr(tombstone_task, "sweep_once", fake_sweep)
+    from parser.main import create_app
+    app = create_app(skip_workers=False)
+    with TestClient(app) as c:
+        for _ in range(20):
+            if calls:
+                break
+            c.get("/healthz")
+    assert len(calls) == 1

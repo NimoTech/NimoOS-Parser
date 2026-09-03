@@ -7,6 +7,7 @@ import time
 from typing import Optional
 
 from parser import pacing
+from parser.pathgate import has_container_ancestor
 from parser.repo_jobs import dequeue_job, complete_job, fail_job, renew_lease
 from parser.repo_records import set_last_error
 
@@ -274,6 +275,14 @@ class WorkerPool:
     def _process(self, job: sqlite3.Row) -> None:
         op = job["op"]
         if op == "index" or op == "reindex":
+            # Last line of defense: a job under a container dir (.system_data
+            # and friends) may already sit in the queue — legacy rows, or an
+            # enqueue path that predates the gate. Never parse it; let the
+            # job complete empty. (Extension / folder rules stay with the
+            # enqueue side — they are configurable and tested there.)
+            if has_container_ancestor(job["path"]):
+                log.info("skip %s job under container dir: %s", op, job["path"])
+                return
             self.text_pipeline.index_file(
                 root_id=job["root_id"], path=job["path"],
                 now_ms=int(time.time() * 1000),

@@ -38,6 +38,9 @@ async def sweep_once(conn: sqlite3.Connection, *, qstore,
     is_path_indexable for ANY of its current paths. Returns affected count."""
     if now_ms is None:
         now_ms = int(time.time() * 1000)
+    if qstore is None:
+        log.warning("allowlist sweep skipped: qdrant unavailable")
+        return 0
 
     rows = list(conn.execute(
         "SELECT fr.file_id FROM file_records fr "
