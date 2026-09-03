@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -106,10 +107,49 @@ _MIGRATION_WIKI_CURSOR_SEQ = (
 )
 
 
+class LockedConnection(sqlite3.Connection):
+    """sqlite3.Connection serialized by a process-wide re-entrant lock.
+
+    One connection is shared by every worker thread (asyncio.to_thread), the
+    wiki poll loop and FastAPI's threadpool. Python's sqlite3 connections are
+    not safe to share that way (threadsafety=1): interleaved statements from
+    two threads corrupt each other's transaction state ("cannot start a
+    transaction within a transaction", "cannot commit - no transaction is
+    active"). Every statement-level call takes `lock`; code that needs a
+    multi-statement transaction holds `lock` itself for the whole span (see
+    repo_jobs.dequeue_job). The lock is re-entrant so those two compose.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.lock = threading.RLock()
+
+    def execute(self, *args, **kwargs):
+        with self.lock:
+            return super().execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        with self.lock:
+            return super().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        with self.lock:
+            return super().executescript(*args, **kwargs)
+
+    def commit(self):
+        with self.lock:
+            return super().commit()
+
+    def rollback(self):
+        with self.lock:
+            return super().rollback()
+
+
 def init_db(path: Path) -> sqlite3.Connection:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
+    conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False,
+                           factory=LockedConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")

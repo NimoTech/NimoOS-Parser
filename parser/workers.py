@@ -156,9 +156,17 @@ class WorkerPool:
                     raise
                 continue
             now = int(time.time() * 1000)
-            job = await asyncio.to_thread(
-                dequeue_job, self.conn, lease_s=self.lease_s, now_ms=now,
-            )
+            try:
+                job = await asyncio.to_thread(
+                    dequeue_job, self.conn, lease_s=self.lease_s, now_ms=now,
+                )
+            except Exception:
+                # A transient DB error (busy/locked) must not kill the worker
+                # task: nothing restarts it and set_concurrency would still
+                # count it as alive, so the pool silently drains to zero.
+                log.exception("worker %s: dequeue failed; retrying", worker_id)
+                await self._interruptible_sleep(self.idle_sleep_s, exit_flag)
+                continue
             if job is None:
                 await self._interruptible_sleep(self.idle_sleep_s, exit_flag)
                 continue
