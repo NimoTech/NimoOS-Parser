@@ -25,13 +25,23 @@ _SOURCE_EXT = {".py", ".go", ".rs", ".ts", ".tsx", ".js", ".jsx", ".java",
 
 
 class TextPipeline:
+    # Default per-file cap (bytes). A text file above it is recorded (so it
+    # stops being re-queued) but its content is not read or embedded: the
+    # plain-text branches read the whole file into RAM, and a 941 MB
+    # nimoos_panic.log pinned a worker for so long on 143 that its lease
+    # expired and other workers re-picked the same file (audit P4/P5).
+    DEFAULT_MAX_FILE_BYTES = 16 * 1024 * 1024
+
     def __init__(self, conn: sqlite3.Connection, *, qstore, embedder,
-                 parser_version: str) -> None:
+                 parser_version: str,
+                 max_file_bytes: int | None = None) -> None:
         self.conn = conn
         self.qstore = qstore
         self.embedder = embedder
         self.parser_version = parser_version
         self.active = {"text": embedder.version}
+        self.max_file_bytes = (self.DEFAULT_MAX_FILE_BYTES
+                               if max_file_bytes is None else max_file_bytes)
 
     def index_file(self, *, root_id: str, path: str, now_ms: int) -> None:
         resolver = IdentityResolver(
@@ -88,6 +98,17 @@ class TextPipeline:
         if not repo_allowlist.is_path_indexable(self.conn, root_id=root_id,
                                                  path=path):
             log.warning("skipped: not indexable per allowlist (path=%s)", path)
+            return
+
+        if self.max_file_bytes and size > self.max_file_bytes:
+            log.warning("skipped content: %s is %d bytes > MaxFileBytes %d",
+                        path, size, self.max_file_bytes)
+            upsert_file_record(
+                self.conn, file_id=file_id, sha256_full=sha256_full,
+                size=size, mime=f"application/x-too-large/{ext.lstrip('.')}",
+                modalities_done={"text": self.embedder.version},
+                parser_version=self.parser_version, indexed_at=now_ms,
+            )
             return
 
         if ext in LEGACY_BINARY_OFFICE_EXTS:

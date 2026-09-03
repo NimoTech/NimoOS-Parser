@@ -113,6 +113,7 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
             app_state.conn, qstore=app_state.qstore,
             embedder=_LazyBGEM3Adapter(),
             parser_version=settings.parser_version,
+            max_file_bytes=settings.max_file_bytes,
         )
         from parser.backendselect import select_caption_backend
         from parser.pipeline_visual import VisualPipeline
