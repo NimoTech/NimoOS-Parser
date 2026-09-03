@@ -198,3 +198,49 @@ def test_reindex_rejects_neither_file_ids_nor_filter(conn):
             conn, qstore=FakeQstore(), file_ids=None, filter=None,
             reason=None, now_ms=500,
         )
+
+
+# --- parser_version drift → automatic incremental re-index (audit 2026-09-03) ---
+
+def _seed_versioned(conn, fid, path, version, root="r1"):
+    from parser.repo_records import upsert_file_record, upsert_file_path
+    upsert_file_record(conn, file_id=fid, sha256_full="s" + fid, size=1, mime="text/markdown",
+                       modalities_done={"text": "bge-m3/v1"}, parser_version=version, indexed_at=1)
+    upsert_file_path(conn, root_id=root, path=path, file_id=fid, mtime_ms=1)
+
+
+def test_enqueue_version_drift_reindexes_only_stale_files(tmp_path):
+    from parser.db import init_db
+    from parser.repo_jobs import list_jobs
+    from parser.service_reindex import enqueue_version_drift
+    conn = init_db(tmp_path / "p.db")
+    _seed_versioned(conn, "old1", "/DATA/a.md", "parser/0.2.0")
+    _seed_versioned(conn, "old2", "/DATA/b.md", "parser/0.2.0")
+    _seed_versioned(conn, "cur", "/DATA/c.md", "parser/0.3.0")
+    n = enqueue_version_drift(conn, parser_version="parser/0.3.0", now_ms=1000)
+    assert n == 2
+    pending = list_jobs(conn, status="pending", limit=10)
+    assert sorted(j["path"] for j in pending) == ["/DATA/a.md", "/DATA/b.md"]
+    assert all(j["op"] == "reindex" for j in pending)
+
+
+def test_enqueue_version_drift_is_idempotent(tmp_path):
+    from parser.db import init_db
+    from parser.repo_jobs import list_jobs
+    from parser.service_reindex import enqueue_version_drift
+    conn = init_db(tmp_path / "p.db")
+    _seed_versioned(conn, "old1", "/DATA/a.md", "parser/0.2.0")
+    assert enqueue_version_drift(conn, parser_version="parser/0.3.0", now_ms=1000) == 1
+    assert enqueue_version_drift(conn, parser_version="parser/0.3.0", now_ms=2000) == 0, \
+        "a restart must not queue a second job while the first is still open"
+    assert len(list_jobs(conn, status="pending", limit=10)) == 1
+
+
+def test_enqueue_version_drift_skips_tombstoned(tmp_path):
+    from parser.db import init_db
+    from parser.repo_records import set_tombstone
+    from parser.service_reindex import enqueue_version_drift
+    conn = init_db(tmp_path / "p.db")
+    _seed_versioned(conn, "old1", "/DATA/a.md", "parser/0.2.0")
+    set_tombstone(conn, file_id="old1", at_ms=5)
+    assert enqueue_version_drift(conn, parser_version="parser/0.3.0", now_ms=1000) == 0

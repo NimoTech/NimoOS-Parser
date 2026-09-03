@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_CONF = Path("/etc/nimoos/parser.conf")
-PARSER_VERSION = "parser/0.2.0"
+# Bump whenever chunking or the Qdrant payload schema changes: every file
+# indexed under an older version is re-indexed incrementally at next start
+# (service_reindex.enqueue_version_drift). 0.3.0: prologue kept, oversized
+# sections split to target_tokens, parent_id/section/section_no payload.
+PARSER_VERSION = "parser/0.3.0"
 try:
     from parser._version import VERSION as PARSER_APP_VERSION  # generated at deploy time; see deploy-parser.sh
 except ImportError:

@@ -92,7 +92,7 @@ class QdrantStore:
                 )
             except Exception:
                 pass
-        for field in ("file_id", "root_ids", "kind", "mime", "lang", "parser_version"):
+        for field in ("file_id", "root_ids", "kind", "mime", "lang", "parser_version", "parent_id"):
             try:
                 self.client.create_payload_index(
                     self.text_collection, field_name=field,

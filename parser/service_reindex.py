@@ -25,6 +25,53 @@ log = logging.getLogger("parser.service_reindex")
 
 MAX_REINDEX_FILE_IDS = 500
 REINDEX_PRIORITY = 1000
+# Version-drift re-index runs behind everything else: live file events (100)
+# and explicit user reindex requests (1000) must never wait for it.
+DRIFT_REINDEX_PRIORITY = 2000
+
+
+def enqueue_version_drift(
+    conn: sqlite3.Connection, *, parser_version: str, now_ms: int,
+) -> int:
+    """Queue a low-priority `reindex` job for every live file whose stored
+    parser_version differs from the running one.
+
+    This is what makes "bump PARSER_VERSION" sufficient: the version check
+    in IdentityResolver only fires when a file is next touched, so without
+    this sweep untouched files kept serving old-schema chunks indefinitely.
+    Idempotent — a path that already has an open job is skipped, so a
+    restart mid-sweep does not double-queue. Returns the number of jobs
+    enqueued. No tombstoning: index_file resolves the drift itself and
+    replaces the file's vectors atomically.
+    """
+    rows = conn.execute(
+        """
+        SELECT fp.root_id, fp.path
+        FROM file_records fr
+        JOIN file_paths fp ON fp.file_id = fr.file_id
+        WHERE fr.parser_version != ? AND fr.tombstoned_at IS NULL
+        ORDER BY fp.root_id, fp.path
+        """,
+        (parser_version,),
+    ).fetchall()
+    queued = 0
+    for r in rows:
+        open_job = conn.execute(
+            "SELECT 1 FROM parse_jobs WHERE root_id = ? AND path = ? "
+            "AND done_at IS NULL LIMIT 1",
+            (r["root_id"], r["path"]),
+        ).fetchone()
+        if open_job is not None:
+            continue
+        enqueue_job(
+            conn, root_id=r["root_id"], path=r["path"], op="reindex",
+            priority=DRIFT_REINDEX_PRIORITY, now_ms=now_ms,
+        )
+        queued += 1
+    if queued:
+        log.info("parser_version drift: queued %d re-index jobs (now %s)",
+                 queued, parser_version)
+    return queued
 
 
 def reindex_files(

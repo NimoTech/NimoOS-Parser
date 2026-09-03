@@ -174,6 +174,14 @@ class TextPipeline:
             point_id = str(uuid.uuid5(
                 uuid.NAMESPACE_OID, f"{file_id}:body:{chunk['chunk_no']}"
             ))
+            # parent_id identifies the section (heading / code block) a chunk
+            # came from: identical for every chunk of that section and stable
+            # across re-indexes of the same content, so Search can merge
+            # sibling hits back into their section (auto-merge retrieval).
+            section_no = chunk.get("section_no", chunk["chunk_no"])
+            parent_id = str(uuid.uuid5(
+                uuid.NAMESPACE_OID, f"{file_id}:section:{section_no}"
+            ))
             points.append({
                 "id": point_id,
                 "dense": emb["dense"],
@@ -184,6 +192,9 @@ class TextPipeline:
                     "kind": "body",
                     "mime": mime,
                     "chunk_no": chunk["chunk_no"],
+                    "parent_id": parent_id,
+                    "section": chunk.get("section", ""),
+                    "section_no": section_no,
                     "text": chunk["text"],
                     "offset_start": chunk["offset_start"],
                     "offset_end": chunk["offset_end"],
