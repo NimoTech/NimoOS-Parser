@@ -172,7 +172,7 @@ class WorkerPool:
                 await self._interruptible_sleep(self.idle_sleep_s, exit_flag)
                 continue
             try:
-                await self._process_with_lease(job)
+                skipped = await self._process_with_lease(job)
                 await asyncio.to_thread(
                     complete_job, self.conn, job["id"],
                     int(time.time() * 1000),
@@ -188,7 +188,7 @@ class WorkerPool:
                 # visual ops (visual asset ingest) don't go through the Wiki
                 # receipt protocol - that's the confirmation channel for Wiki
                 # file-type jobs; visual_ingest's caller is Photos.
-                if not job["op"].startswith("visual"):
+                if not skipped and not job["op"].startswith("visual"):
                     await self._notify_wiki(job, status="indexed" if job["op"] != "delete" else "deleted")
             except Exception as e:
                 log.exception("worker %s failed job id=%s", worker_id, job["id"])
@@ -242,7 +242,7 @@ class WorkerPool:
         except (ValueError, TypeError):
             return None
 
-    async def _process_with_lease(self, job: sqlite3.Row) -> None:
+    async def _process_with_lease(self, job: sqlite3.Row) -> bool:
         """Run _process in a thread while a heartbeat keeps the job's lease
         alive. Without it a file that takes longer than lease_s was re-picked
         by another worker while still being processed (duplicate CPU and
@@ -267,12 +267,15 @@ class WorkerPool:
 
         hb = asyncio.create_task(heartbeat())
         try:
-            await asyncio.to_thread(self._process, job)
+            return bool(await asyncio.to_thread(self._process, job))
         finally:
             stop.set()
             await hb
 
-    def _process(self, job: sqlite3.Row) -> None:
+    def _process(self, job: sqlite3.Row) -> bool:
+        """Run the job. Returns True when the job was *skipped* (gated path):
+        the caller then completes it without a Wiki receipt, because nothing
+        was indexed."""
         op = job["op"]
         if op == "index" or op == "reindex":
             # Last line of defense: a job under a container dir (.system_data
@@ -282,7 +285,7 @@ class WorkerPool:
             # enqueue side — they are configurable and tested there.)
             if has_container_ancestor(job["path"]):
                 log.info("skip %s job under container dir: %s", op, job["path"])
-                return
+                return True
             self.text_pipeline.index_file(
                 root_id=job["root_id"], path=job["path"],
                 now_ms=int(time.time() * 1000),
@@ -308,3 +311,4 @@ class WorkerPool:
             )
         else:
             raise ValueError(f"unknown op: {op}")
+        return False

@@ -311,3 +311,26 @@ def test_worker_refuses_index_jobs_under_container_dirs(conn):
     asyncio.run(runner())
     assert pipe.calls == [("r", "/DATA/Documents/a.md")]
     assert list_jobs(conn, status="failed", limit=10) == []
+
+
+def test_worker_does_not_report_skipped_container_dir_jobs_to_wiki(conn):
+    # A job refused by the container-dir gate was never indexed, so Wiki must
+    # not be told "indexed" for it (Wiki answers 503 for gated paths anyway).
+    enqueue_job(conn, root_id="r", path="/DATA/.system_data/x/a.md",
+                op="reindex", priority=100, now_ms=100)
+    wiki = FakeWiki()
+    pool = WorkerPool(conn, text_pipeline=FakePipeline(), concurrency=1,
+                      lease_s=10, wiki_client=wiki, idle_sleep_s=0.01)
+
+    async def runner():
+        await pool.start()
+        for _ in range(200):
+            if not list_jobs(conn, status="pending", limit=10) and \
+               not list_jobs(conn, status="running", limit=10):
+                break
+            await asyncio.sleep(0.05)
+        await pool.stop()
+
+    asyncio.run(runner())
+    assert list_jobs(conn, status="pending", limit=10) == []
+    assert wiki.calls == []
