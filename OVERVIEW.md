@@ -55,7 +55,7 @@ Binds to `127.0.0.1:8283`, forwarded by the Gateway, API prefix `/v1/parser`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | Health check |
-| GET | `/stats` | Queue depth, number of indexed files, total vector count, model info |
+| GET | `/stats` | Queue depth, number of indexed files, total vector count, model info, plus `wiki_cursor` (`since_ms`/`last_seq`/`gap`/`gap_detected_at`) and `verify_last` (the last ledger-verify result) |
 | GET | `/jobs` | List pending/running/failed jobs |
 | POST | `/jobs/retry` | Retry failed jobs (can specify file_ids) |
 | DELETE | `/jobs/{job_id}` | Cancel a pending job |
@@ -63,7 +63,7 @@ Binds to `127.0.0.1:8283`, forwarded by the Gateway, API prefix `/v1/parser`.
 | GET | `/files` | Paginated file list (supports filtering by root_id/mime/status) |
 | GET | `/_internal/files` | Bulk file metadata lookup by file_id (internal endpoint) |
 | POST | `/files/reindex` | Force reindex by file_ids or filter criteria |
-| POST | `/rescan` | Re-enqueue all known paths for a given root_id (op=reindex) |
+| POST | `/rescan` | `op=reindex` (root_id required): re-enqueue every known path under that root. `op=verify` (root_id optional): reconcile the ledger against Wiki's file_index in the background — 202 on start, 409 while a verify is already running, 503 when the verify runner is not wired (no Wiki discovery file or no Qdrant); the result lands in `/stats` `verify_last` |
 | GET | `/folders/pending` | Pending job count aggregated by directory |
 | POST | `/embed` | Call BGE-M3 to generate embedding vectors (used by Search's query side) |
 | POST | `/rerank` | Call BGE-Reranker-v2-M3 to rerank (used by Search's fine-ranking) |
@@ -179,10 +179,10 @@ Key payload fields for file indexing: `file_id` / `root_ids` / `kind` / `mime` /
 |---|---|
 | `file_records` | Each file's sha256/size/mime/modalities_done/vector_count/tombstoned_at |
 | `file_paths` | File path mapping (root_id + path → file_id + mtime_ms), supports multiple paths per file |
-| `parse_jobs` | Job queue (op: index/delete/reindex; priority/attempts/last_error/locked_until) |
+| `parse_jobs` | Job queue (op: index/delete/reindex/retire_root; priority/attempts/last_error/locked_until). `retire_root` carries an empty `path` and priority 50 — ahead of ordinary index/reindex work (100/500), because a removed root's records must stop being searchable before anything else is indexed |
 | `model_versions` | Registered model versions (name/version/modality/dim/active) |
 | `wiki_cursor` | WikiConsumer cursor (since_ms), tracks the position of processed file events |
-| `parser_state` | Runtime-adjustable params: paused/concurrency/device/ocr_enabled |
+| `parser_state` | Runtime-adjustable params: paused/concurrency/device/ocr_enabled, plus two JSON columns: `cursor_gap` (the Wiki file-events cursor fell behind Wiki's 90-day archive horizon, so those events are gone — cleared once the cursor is back inside it) and `verify_last` (last `op=verify` result: trigger, started_at/finished_at, ok, per-root counts, retired_roots, error) |
 | `allowlist_extensions` | Extension allowlist (enabled/source/updated_at) |
 | `allowlist_folders` | Directory-level allow/deny glob rules |
 
@@ -307,7 +307,7 @@ pytest
 
 ## Relationship to other services
 
-- **Depends on NimoOS-Wiki**: `WikiConsumer` polls Wiki's file-events endpoint to drive incremental indexing. Wiki's address is discovered via `/var/run/nimoos/wiki.url`.
+- **Depends on NimoOS-Wiki**: `WikiConsumer` polls Wiki's file-events endpoint to drive incremental indexing. Wiki's address is discovered via `/var/run/nimoos/wiki.url`. Wiki also owns the root list (`GET /v1/wiki/roots`) and the authoritative per-root file list (`GET /v1/wiki/_internal/files`) that `op=verify` reconciles against; a `root_removed` event becomes a `retire_root` job, and a cursor that fell behind Wiki's archive horizon triggers a verify automatically.
 - **Depends on Qdrant**: vector storage, defaults to `http://127.0.0.1:6333` (HTTP) + `6334` (gRPC, prefer_grpc=True).
 - **Called by NimoOS-Search**: Search performs semantic retrieval via `/v1/parser/embed` (query vectorization), `/v1/parser/rerank` (result reranking), and direct Qdrant queries.
 - **Called by NimoOS-AI** (`NimoOS-AI/agent/parser_client.py`): file-reader uses `/v1/parser/extract` (on-demand parsing of unindexed files) and `/v1/parser/render/pages` (visual page reading); the agent's cross-session memory uses `/v1/parser/agent-memory/upsert|query`. Per-user visibility auth is handled at the AI layer; Parser only enforces the data root-path backstop (`EXTRACT_ROOTS`).
@@ -320,3 +320,4 @@ pytest
 - RAG vector store (indexing pipeline): internal design doc `2026-05-21-rag-vector-db-design.md`
 - file-reader (`/extract` + `/render/pages`): internal design doc `2026-06-23-file-reader-skill-design.md`, see the internal design doc for the runtime path
 - agent memory recall (`/agent-memory/*`): internal design doc `2026-06-26-agent-memory-p2-recall-design.md`
+- Wiki↔Parser ledger consistency (root retirement, `op=verify`, archive-horizon gap detection): internal design doc `2026-09-04-ledger-consistency-design.md`
