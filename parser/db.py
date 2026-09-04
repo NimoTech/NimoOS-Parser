@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS parser_state (
   device      TEXT NOT NULL DEFAULT 'auto',
   ocr_enabled INTEGER NOT NULL DEFAULT 0,
   ocr_model   TEXT NOT NULL DEFAULT '',
+  cursor_gap  TEXT,
+  verify_last TEXT,
   updated_at  INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO parser_state
@@ -102,6 +104,8 @@ _MIGRATION_OCR = "ALTER TABLE parser_state ADD COLUMN ocr_enabled INTEGER NOT NU
 _MIGRATION_OCR_MODEL = (
     "ALTER TABLE parser_state ADD COLUMN ocr_model TEXT NOT NULL DEFAULT '';"
 )
+_MIGRATION_CURSOR_GAP = "ALTER TABLE parser_state ADD COLUMN cursor_gap TEXT;"
+_MIGRATION_VERIFY_LAST = "ALTER TABLE parser_state ADD COLUMN verify_last TEXT;"
 _MIGRATION_WIKI_CURSOR_SEQ = (
     "ALTER TABLE wiki_cursor ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;"
 )
@@ -168,6 +172,10 @@ def init_db(path: Path) -> sqlite3.Connection:
         conn.execute(_MIGRATION_OCR)
     if cols and "ocr_model" not in cols:
         conn.execute(_MIGRATION_OCR_MODEL)
+    if cols and "cursor_gap" not in cols:
+        conn.execute(_MIGRATION_CURSOR_GAP)
+    if cols and "verify_last" not in cols:
+        conn.execute(_MIGRATION_VERIFY_LAST)
     wc_cols = {
         r[1] for r in conn.execute("PRAGMA table_info(wiki_cursor)").fetchall()
     }
