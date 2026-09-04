@@ -50,10 +50,11 @@ _GGUF_FALLBACK_CANDIDATE = {"runtime": "llamacpp", "device": "cpu", "tier": 10, 
 def _weights_present(model_path: Path, gguf_path: Path, mmproj_path: Path) -> tuple[bool, bool]:
     """Which weight forms are actually on disk: (IR, GGUF).
 
-    The install channel ships only the GGUF weights by default (the IR form is
-    produced by converting on an Intel machine, see scripts/vlm/README.md), so
-    "hardware says openvino, disk says gguf" is the normal state of a fresh
-    install — candidate selection has to consult the disk, not just the probes.
+    The install channel picks the weight form by hardware: Intel GPU machines
+    get the OpenVINO IR (deps/parser/qwen3-vl-4b-int4-ov.tar.zst), everything
+    else gets GGUF, and an Intel machine whose IR download failed falls back to
+    GGUF — so "hardware says openvino, disk says gguf" is a real state, and
+    candidate selection has to consult the disk, not just the probes.
     """
     try:
         ir_ok = model_path.is_dir() and any(model_path.iterdir())
@@ -237,7 +238,7 @@ def select_caption_backend(*, vlm_device: str, model_path: Path,
 
     # Probes describe the hardware, not the weights: an Intel-only machine
     # yields a pure-openvino chain, and if the disk only holds GGUF weights
-    # (what the installer ships), every link would fail to load and captions
+    # (the installer's fallback when the IR was unavailable), every link would fail to load and captions
     # would be dead even though llama.cpp could serve them on CPU. When
     # exactly one weight form is present, drop the candidates that can never
     # load; the guaranteed tail matching the surviving form is appended by
