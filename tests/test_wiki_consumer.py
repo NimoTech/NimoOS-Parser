@@ -17,6 +17,8 @@ class FakeWiki:
         if not self.batches:
             return []
         return self.batches.pop(0)
+    async def fetch_file_events_page(self, *, since_ms, after_seq=0, limit):
+        return {"events": await self.fetch_file_events(since_ms=since_ms, after_seq=after_seq, limit=limit)}
 
 
 @pytest.fixture
