@@ -39,6 +39,10 @@ def _is_text_indexable(conn: sqlite3.Connection, root_id: str,
 
 
 def _op_for_event(ev: dict, conn: sqlite3.Connection) -> str | None:
+    if ev.get("op") == "root_removed":
+        # One event per deleted root (Wiki >= 2026-09). Not subject to the
+        # allowlist: it retires records, it never indexes.
+        return "retire_root"
     if ev.get("is_dir"):
         return None
     op = ev.get("op")
@@ -103,8 +107,9 @@ class WikiConsumer:
             if op is None:
                 continue
             enqueue_job(
-                self.conn, root_id=ev["root_id"], path=ev["path"], op=op,
-                priority=100, now_ms=now,
+                self.conn, root_id=ev["root_id"],
+                path="" if op == "retire_root" else ev["path"], op=op,
+                priority=50 if op == "retire_root" else 100, now_ms=now,
             )
         # Wiki returns ORDER BY (detected_at, rowid); the last event IS the
         # cursor. seq missing (old Wiki) degrades to the legacy detected_at
