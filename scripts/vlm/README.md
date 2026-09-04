@@ -16,11 +16,34 @@ hardware**:
   `vlm_gguf_model`/`vlm_gguf_mmproj` default paths). Inference goes through
   `model_vlm_llamacpp.py` (llama.cpp, in-process multimodal).
 
-You don't need both paths at once - convert IR if the target machine is
-Intel, download GGUF if it's AMD/NVIDIA. With `vlm_device=auto`,
-`backendselect` automatically picks the matching candidate based on the
-hardware it detects on the local machine; the runtime doesn't care whether
-weight files for the other path also happen to exist on disk.
+You don't need both paths at once - IR if the target machine is Intel,
+GGUF if it's AMD/NVIDIA. With `vlm_device=auto`, `backendselect`
+automatically picks the matching candidate based on the hardware it detects
+on the local machine; the runtime doesn't care whether weight files for the
+other path also happen to exist on disk.
+
+## Distribution
+
+Fresh installs get the right form automatically from the deps channel
+(`install-parser.sh` in NimoOS-Build): an Intel GPU machine downloads
+`deps/parser/qwen3-vl-4b-int4-ov.tar.zst` (sha256 pinned in the installer,
+`NIMO_PARSER_VLM_OV=0/1` skips/forces) and skips the GGUF unless that
+download fails; every other machine downloads
+`deps/parser/qwen3-vl-4b-gguf.tar.zst`. Running `convert_qwen3vl.sh` is
+only needed to regenerate a package or on a machine without deps access.
+Never convert on the NAS itself: the IR export loads the 4B model in fp32
+(~17 GB) and took a 16 GB box down twice.
+
+To republish the IR package after re-converting:
+
+```bash
+cd /opt/nimoos-parser/models
+tar --sort=name --owner=0 --group=0 --numeric-owner -I 'zstd -T2 -3' \
+    -cf qwen3-vl-4b-int4-ov.tar.zst qwen3-vl-4b-int4
+sha256sum qwen3-vl-4b-int4-ov.tar.zst   # update DEP_VLM_OV_SHA256 in install-parser.sh
+aws s3 cp qwen3-vl-4b-int4-ov.tar.zst s3://nimoos-public/deps/parser/
+# overwriting the key requires a CloudFront invalidation of /deps/parser/*
+```
 
 ## Dependency boundaries
 
