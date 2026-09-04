@@ -1,3 +1,4 @@
+import sqlite3
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,3 +105,49 @@ def test_retire_root_keeps_its_own_in_flight_job(conn):
     remaining = list_jobs(conn, status="pending", limit=10)
     assert [j["op"] for j in remaining] == ["retire_root"], \
         "the in-flight retire_root job itself must survive; the worker completes it"
+
+
+class _FailingConn:
+    """Passes everything through to the real connection but raises on the
+    statement whose SQL contains `marker`, once."""
+
+    def __init__(self, conn, marker):
+        self.conn = conn
+        self.marker = marker
+        self.armed = True
+
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+
+    def execute(self, sql, *args, **kw):
+        if self.armed and self.marker in sql:
+            self.armed = False
+            raise sqlite3.OperationalError("disk I/O error")
+        return self.conn.execute(sql, *args, **kw)
+
+
+def test_retire_root_tombstone_survives_a_failing_path_delete(conn):
+    # Statement order matters: with DELETE FROM file_paths first, a failure of
+    # the following set_tombstone left the file with no path AND no
+    # tombstoned_at — invisible to a retry (no path to find it by) and to gc
+    # (no tombstone to collect). The tombstone must land first.
+    _seed(conn, "only", [("r1", "/mnt/a.md")])
+    qstore = MagicMock()
+    guarded = _FailingConn(conn, "DELETE FROM file_paths")
+
+    with pytest.raises(sqlite3.OperationalError):
+        retire_root(guarded, qstore, root_id="r1", now_ms=999)
+
+    assert conn.execute(
+        "SELECT tombstoned_at FROM file_records WHERE file_id='only'"
+    ).fetchone()[0] == 999, "the tombstone is written before the path is dropped"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM file_paths WHERE root_id='r1'"
+    ).fetchone()[0] == 1, "the path is still there, so a retry can finish the job"
+
+    out = retire_root(conn, qstore, root_id="r1", now_ms=1000)
+
+    assert out["files_seen"] == 1 and out["tombstoned"] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM file_paths WHERE root_id='r1'"
+    ).fetchone()[0] == 0

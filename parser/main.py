@@ -90,6 +90,16 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
     app_state.conn = init_db(settings.data_path / "parser.db")
     _register_active_models(app_state.conn)
 
+    # A verify that was in flight when the process died left verify_last with
+    # finished_at=null, which /stats renders as a verify still running.
+    try:
+        from parser.service_verify import repair_interrupted_verify
+        if repair_interrupted_verify(app_state.conn, int(time.time() * 1000)):
+            log.warning("previous verify was interrupted by a restart; "
+                        "marked finished in verify_last")
+    except Exception:
+        log.exception("verify_last repair failed; continuing")
+
     try:
         qstore = QdrantStore(url=settings.qdrant_url,
                              grpc_port=settings.qdrant_grpc_port)
@@ -240,6 +250,13 @@ async def _full_lifecycle_shutdown() -> None:
         except Exception as e:
             log.warning("consumer stop failed: %s", e)
         app_state.consumer = None
+    # After the consumer (nothing can trigger a new verify now) and before the
+    # worker pool / conn / qstore the running task uses.
+    if app_state.verify_runner is not None:
+        try:
+            await app_state.verify_runner.stop()
+        except Exception as e:
+            log.warning("verify runner stop failed: %s", e)
     app_state.verify_runner = None
     if app_state.worker_pool is not None:
         try:

@@ -36,6 +36,10 @@ def _set_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PARSER_WIKI_DISCOVERY_PATH",
                        str(tmp_path / "wiki.url"))
     monkeypatch.setenv("PARSER_QDRANT_URL", "http://127.0.0.1:1")
+    # QdrantStore uses prefer_grpc=True, so the URL's port is not the one that
+    # gets dialled: without this the test reaches the PRODUCTION Qdrant on
+    # 6334 and the graceful-degradation asserts below become meaningless.
+    monkeypatch.setenv("PARSER_QDRANT_GRPC_PORT", "1")
     # Long enough that GC doesn't fire during the test.
     monkeypatch.setenv("PARSER_GC_INTERVAL_S", "3600")
     monkeypatch.delenv("PARSER_DISCOVERY_FILE", raising=False)

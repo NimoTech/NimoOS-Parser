@@ -42,12 +42,20 @@ def retire_root(conn: sqlite3.Connection, qstore, *, root_id: str, now_ms: int) 
             out["rehomed"] += 1
         else:
             qstore.tombstone_file(file_id=fid, tombstoned_at=now_ms)
+            # Tombstone BEFORE dropping the path: the reverse order means a
+            # failure of the second statement leaves the file with no path
+            # (nothing to find it by on a retry) and no tombstoned_at
+            # (nothing for gc to collect) — a permanently orphaned record.
+            set_tombstone(conn, file_id=fid, at_ms=now_ms)
             conn.execute(
                 "DELETE FROM file_paths WHERE root_id = ? AND file_id = ?",
                 (root_id, fid))
-            set_tombstone(conn, file_id=fid, at_ms=now_ms)
             out["tombstoned"] += 1
 
+    # Dropping a row for a job that is already leased by a worker does not
+    # stop that worker: it can still finish and re-create file_records /
+    # file_paths for this root afterwards. Those strays are transient — the
+    # next verify sees a root Wiki no longer lists and retires them again.
     cur = conn.execute(
         "DELETE FROM parse_jobs WHERE root_id = ? AND done_at IS NULL AND op != 'retire_root'",
         (root_id,))
