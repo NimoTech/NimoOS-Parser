@@ -81,3 +81,22 @@ def test_rescan_reindex_skips_paths_no_longer_indexable(client, monkeypatch, tmp
     assert r.status_code == 200
     assert r.json() == {"queued": 1}
     assert [j["path"] for j in list_jobs(conn, status="pending", limit=10)] == ["/DATA/a.txt"]
+
+
+def test_rescan_verify_passes_root_id_through_to_the_runner(client, monkeypatch):
+    class FakeRunner:
+        def __init__(self): self.calls = []
+        @property
+        def running(self): return False
+        def start(self, *, root_ids, trigger):
+            self.calls.append((root_ids, trigger)); return True
+    runner = FakeRunner()
+    from parser.main import app_state
+    monkeypatch.setattr(app_state, "verify_runner", runner, raising=False)
+
+    r = client.post("/v1/parser/rescan", json={"op": "verify", "root_id": "r1"})
+
+    assert r.status_code == 202
+    assert r.json() == {"started": True, "trigger": "manual"}
+    assert runner.calls == [(["r1"], "manual")], \
+        "a single-root verify must not degrade into a full-ledger verify"

@@ -59,3 +59,10 @@ def test_delete_event_under_container_dir_still_passes(conn):
 def test_root_removed_event_maps_to_retire_root(conn):
     ev = {"op": "root_removed", "root_id": "r1", "path": "", "is_dir": 0}
     assert _op_for_event(ev, conn) == "retire_root"
+
+
+def test_root_removed_event_with_is_dir_still_retires(conn):
+    # Wiki marks the root row is_dir=1; the is_dir early-return must not
+    # swallow root_removed, or the whole root would silently stay indexed.
+    ev = {"op": "root_removed", "root_id": "r1", "path": "", "is_dir": 1}
+    assert _op_for_event(ev, conn) == "retire_root"

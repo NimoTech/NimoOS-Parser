@@ -93,7 +93,7 @@ class WikiConsumer:
                 events = page.get("events", [])
                 if events:
                     await asyncio.to_thread(self._ingest, events)
-                await self._check_archive_gap(page, since, seq)
+                await self._check_archive_gap(page)
                 backoff = self.poll_interval_s
             except Exception as e:
                 log.warning("wiki fetch failed: %s; backing off %ss", e, backoff)
@@ -103,7 +103,7 @@ class WikiConsumer:
             except asyncio.TimeoutError:
                 pass
 
-    async def _check_archive_gap(self, page: dict, since_ms: int, last_seq: int) -> None:
+    async def _check_archive_gap(self, page: dict) -> None:
         """Wiki archives file_events after keepDays; the feed only serves
         archived=0. A cursor older than the archive cutoff means the events in
         between are gone for good. Record it once, hand it to on_gap (which
@@ -119,15 +119,36 @@ class WikiConsumer:
         existing = await asyncio.to_thread(get_cursor_gap, self.conn)
         if behind and existing is None:
             gap = {"detected_at": int(time.time() * 1000), "since_ms": cur_since,
-                   "last_seq": cur_seq, "archive_cutoff_ms": int(cutoff)}
+                   "last_seq": cur_seq, "archive_cutoff_ms": int(cutoff),
+                   "triggered": False}
             await asyncio.to_thread(set_cursor_gap, self.conn, gap)
             log.warning("wiki cursor %s is behind the archive cutoff %s: events were archived "
                         "before we consumed them; running verify", cur_since, cutoff)
-            if self.on_gap is not None:
-                await self.on_gap(gap)
+            await self._fire_gap(gap)
+        elif behind and existing is not None and existing.get("triggered") is False:
+            # The record is written before the handler runs, so a handler that
+            # raised used to leave a gap nobody would ever act on: the next
+            # poll saw `existing` and skipped it forever. Retry until it lands.
+            log.info("retrying the verify for the recorded cursor gap")
+            await self._fire_gap(existing)
         elif not behind and existing is not None:
             await asyncio.to_thread(set_cursor_gap, self.conn, None)
             log.info("wiki cursor back inside the archive horizon; gap cleared")
+
+    async def _fire_gap(self, gap: dict) -> None:
+        """Run on_gap and record whether it actually took. Its failure must not
+        reach _loop, which would only log 'wiki fetch failed' and double the
+        poll backoff for something unrelated to fetching."""
+        if self.on_gap is None:
+            gap["triggered"] = True  # nothing to retry; don't loop forever
+        else:
+            try:
+                await self.on_gap(gap)
+                gap["triggered"] = True
+            except Exception as e:  # noqa: BLE001 - retried on the next poll
+                log.warning("cursor gap handler failed: %s", e)
+                gap["triggered"] = False
+        await asyncio.to_thread(set_cursor_gap, self.conn, gap)
 
     def _ingest(self, events: list[dict]) -> None:
         if not events:  # _loop guards this; keep future direct callers safe
