@@ -123,3 +123,23 @@ def test_gap_marked_triggered_even_without_a_handler(conn):
            until=lambda: get_cursor_gap(conn) is not None)
     assert get_cursor_gap(conn)["triggered"] is True, \
         "nothing to retry without a handler; do not loop forever"
+
+
+def test_gap_stays_untriggered_when_the_handler_refuses(conn):
+    # main's on_gap returns False when VerifyRunner.start() refused because a
+    # verify is already running. That verify may predate the gap, so the gap's
+    # own verify has not happened: the record must stay triggered=False and be
+    # retried on the next poll instead of being marked done.
+    set_wiki_cursor(conn, since_ms=1_000, last_seq=3, now_ms=1)
+    wiki = SteadyWiki({"events": [], "archive_cutoff_ms": 5_000, "has_archived": True})
+    calls = []
+
+    async def on_gap(gap):
+        calls.append(dict(gap))
+        return len(calls) >= 2  # refused once, then accepted
+
+    _drive(conn, wiki, on_gap=on_gap, until=lambda: len(calls) >= 2)
+
+    assert len(calls) == 2, "retried after the refusal, then stopped"
+    stored = get_cursor_gap(conn)
+    assert stored["triggered"] is True and stored["since_ms"] == 1_000
