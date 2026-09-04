@@ -315,7 +315,22 @@ class QdrantStore:
         return items, next_offset
 
     def count_vectors(self) -> dict:
+        """Vector totals for /stats, split by payload kind inside text_chunks.
+
+        "text" counts document chunks (kind != caption); "visual" counts photo
+        captions (kind == caption, one point per asset, see pipeline_visual).
+        visual_chunks is a never-written placeholder collection and is
+        deliberately not consulted — counting it reported 0 forever while the
+        captions inflated the text total. Filtered counts use the indexed
+        `kind` field and are exact (approximate counts ignore filters' cost
+        model and can drift on small collections).
+        """
+        caption = qm.FieldCondition(key="kind", match=qm.MatchValue(value="caption"))
         return {
-            "text": self.client.count(self.text_collection, exact=False).count,
-            "visual": self.client.count(self.visual_collection, exact=False).count,
+            "text": self.client.count(
+                self.text_collection, count_filter=qm.Filter(must_not=[caption]),
+                exact=True).count,
+            "visual": self.client.count(
+                self.text_collection, count_filter=qm.Filter(must=[caption]),
+                exact=True).count,
         }
