@@ -139,6 +139,7 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
         app_state.worker_pool = WorkerPool(
             app_state.conn, text_pipeline=pipeline,
             visual_pipeline=app_state.visual_pipeline,
+            qstore=app_state.qstore,
             concurrency=_state["concurrency"],
             lease_s=settings.job_lease_s,
             wiki_client=app_state.wiki_client,

@@ -109,3 +109,24 @@ def test_cursor_migration_adds_last_seq(tmp_path):
     row = conn.execute("SELECT since_ms, last_seq FROM wiki_cursor WHERE id = 1").fetchone()
     assert row["since_ms"] == 42
     assert row["last_seq"] == 0
+
+
+def test_consumer_enqueues_retire_root_at_top_priority(conn):
+    wiki = FakeWiki([[{"id": "e1", "root_id": "gone", "path": "", "op": "root_removed",
+                       "is_dir": 0, "detected_at": 100, "seq": 7}]])
+    c = WikiConsumer(conn, wiki, poll_interval_s=0.01, poll_limit=100)
+
+    async def runner():
+        await c.start()
+        for _ in range(50):
+            if list_jobs(conn, status="pending", limit=10):
+                break
+            await asyncio.sleep(0.02)
+        await c.stop()
+
+    asyncio.run(runner())
+    jobs = list_jobs(conn, status="pending", limit=10)
+    assert len(jobs) == 1
+    assert (jobs[0]["op"], jobs[0]["root_id"], jobs[0]["path"], jobs[0]["priority"]) == \
+        ("retire_root", "gone", "", 50)
+    assert get_wiki_cursor(conn) == (100, 7)

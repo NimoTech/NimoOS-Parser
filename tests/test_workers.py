@@ -334,3 +334,31 @@ def test_worker_does_not_report_skipped_container_dir_jobs_to_wiki(conn):
     asyncio.run(runner())
     assert list_jobs(conn, status="pending", limit=10) == []
     assert wiki.calls == []
+
+
+def test_worker_dispatches_retire_root_and_sends_no_wiki_receipt(conn):
+    from unittest.mock import MagicMock
+    from parser.repo_records import upsert_file_path, upsert_file_record
+    upsert_file_record(conn, file_id="f1", sha256_full="s1", size=1, mime="text/plain",
+                       modalities_done={"text": "v1"}, parser_version="parser/0.3.0", indexed_at=1)
+    upsert_file_path(conn, root_id="gone", path="/mnt/a.md", file_id="f1", mtime_ms=1)
+    enqueue_job(conn, root_id="gone", path="", op="retire_root", priority=50, now_ms=100)
+    qstore = MagicMock()
+    wiki = FakeWiki()
+    pool = WorkerPool(conn, text_pipeline=FakePipeline(), concurrency=1, lease_s=10,
+                      wiki_client=wiki, qstore=qstore, idle_sleep_s=0.01)
+
+    async def runner():
+        await pool.start()
+        for _ in range(200):
+            if not list_jobs(conn, status="pending", limit=10) and \
+               not list_jobs(conn, status="running", limit=10):
+                break
+            await asyncio.sleep(0.05)
+        await pool.stop()
+
+    asyncio.run(runner())
+    qstore.tombstone_file.assert_called_once()
+    assert conn.execute("SELECT COUNT(*) FROM file_paths WHERE root_id='gone'").fetchone()[0] == 0
+    assert list_jobs(conn, status="failed", limit=10) == []
+    assert wiki.calls == [], "a retired root has no Wiki to receive a receipt"

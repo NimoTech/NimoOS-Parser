@@ -54,3 +54,8 @@ def test_delete_event_under_container_dir_still_passes(conn):
     ev = {"op": "delete", "root_id": "r1",
           "path": "/DATA/.system_data/home/nimo/.claude.json"}
     assert _op_for_event(ev, conn) == "delete"
+
+
+def test_root_removed_event_maps_to_retire_root(conn):
+    ev = {"op": "root_removed", "root_id": "r1", "path": "", "is_dir": 0}
+    assert _op_for_event(ev, conn) == "retire_root"

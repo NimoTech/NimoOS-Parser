@@ -10,6 +10,7 @@ from parser import pacing
 from parser.pathgate import has_container_ancestor
 from parser.repo_jobs import dequeue_job, complete_job, fail_job, renew_lease
 from parser.repo_records import set_last_error
+from parser.service_retire import retire_root
 
 log = logging.getLogger("parser.workers")
 
@@ -19,6 +20,7 @@ class WorkerPool:
 
     def __init__(
         self, conn: sqlite3.Connection, *, text_pipeline, visual_pipeline=None,
+        qstore=None,
         concurrency: int = 2,
         lease_s: int = 300, max_attempts: int = 5,
         idle_sleep_s: float = 0.5,
@@ -28,6 +30,7 @@ class WorkerPool:
         self.conn = conn
         self.text_pipeline = text_pipeline
         self.visual_pipeline = visual_pipeline
+        self.qstore = qstore
         self.concurrency = concurrency
         self.lease_s = lease_s
         self.max_attempts = max_attempts
@@ -290,6 +293,10 @@ class WorkerPool:
                 root_id=job["root_id"], path=job["path"],
                 now_ms=int(time.time() * 1000),
             )
+        elif op == "retire_root":
+            retire_root(self.conn, self.qstore, root_id=job["root_id"],
+                        now_ms=int(time.time() * 1000))
+            return True  # no Wiki receipt: the root no longer exists there
         elif op == "delete":
             if hasattr(self.text_pipeline, "delete_path"):
                 self.text_pipeline.delete_path(
