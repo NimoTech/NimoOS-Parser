@@ -105,11 +105,12 @@ class WikiClient:
         for row in rows:
             rid = row.get("id") or row.get("ID")
             if not rid:
-                # Wiki's repo.WikiRoot carries no json tags, so the wire keys
-                # follow the Go field names: one rename upstream and every row
-                # lands here. Silently returning [] told verify "Wiki holds no
-                # roots" and it retired the whole ledger — count, log, and
-                # refuse outright when nothing is usable.
+                # Wiki's repo.WikiRoot pins its json tags to the PascalCase
+                # names (ID/Path/Enabled, models_wire_test.go), so a rename
+                # upstream now fails Wiki's own tests before reaching the wire.
+                # Keep the guard anyway: silently returning [] once told verify
+                # "Wiki holds no roots" and it retired the whole ledger — count,
+                # log, and refuse outright when nothing is usable.
                 dropped += 1
                 continue
             out.append({

@@ -138,13 +138,21 @@ class WikiConsumer:
     async def _fire_gap(self, gap: dict) -> None:
         """Run on_gap and record whether it actually took. Its failure must not
         reach _loop, which would only log 'wiki fetch failed' and double the
-        poll backoff for something unrelated to fetching."""
+        poll backoff for something unrelated to fetching.
+
+        Contract: a handler that returns False *refused* (main's handler does
+        when VerifyRunner.start() finds a verify already running — one that
+        may predate the gap and so cannot stand in for it); the record stays
+        triggered=False and is retried on the next poll. None or True means
+        the verify was started."""
         if self.on_gap is None:
             gap["triggered"] = True  # nothing to retry; don't loop forever
         else:
             try:
-                await self.on_gap(gap)
-                gap["triggered"] = True
+                took = await self.on_gap(gap)
+                gap["triggered"] = took is not False
+                if took is False:
+                    log.info("cursor gap handler refused (verify busy); will retry next poll")
             except Exception as e:  # noqa: BLE001 - retried on the next poll
                 log.warning("cursor gap handler failed: %s", e)
                 gap["triggered"] = False

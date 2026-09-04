@@ -73,6 +73,15 @@ class FakeWiki:
         return {"files": rows, "next_after": rows[-1]["path"] if len(rows) == limit else ""}
 
 
+def _entry(root_id, status="verified", **counts):
+    """Every verify_last.roots element has the same keys regardless of status,
+    so a UI can render one row type: skipped roots carry zeros."""
+    e = {"root_id": root_id, "status": status, "wiki_files": 0, "local_files": 0,
+         "missing": 0, "stale": 0, "extra": 0, "extra_skipped": 0}
+    e.update(counts)
+    return e
+
+
 @pytest.mark.asyncio
 async def test_run_verify_retires_unknown_roots_and_reports_counts(conn):
     _seed(conn, "a", "r1", "/r1/a.md", 1000)
@@ -89,10 +98,40 @@ async def test_run_verify_retires_unknown_roots_and_reports_counts(conn):
     assert res["finished_at"] >= res["started_at"] == 50, \
         "finished_at is measured when the run ends, not copied from started_at"
     assert res["retired_roots"] == ["zombie"]
-    assert res["roots"] == [{"root_id": "r1", "wiki_files": 2, "local_files": 1,
-                             "missing": 1, "stale": 0, "extra": 0}]
+    assert res["roots"] == [_entry("r1", wiki_files=2, local_files=1, missing=1)]
     qstore.tombstone_file.assert_called_once_with(file_id="z", tombstoned_at=50)
     assert get_verify_last(conn) == res
+
+
+@pytest.mark.asyncio
+async def test_run_verify_for_named_roots_never_retires_other_roots(conn):
+    # A single-root verify is scoped to that root. Retiring roots Wiki no
+    # longer lists is a whole-ledger reconciliation and belongs to the
+    # root_ids=None run only; a targeted run must not have side effects on
+    # roots the caller did not name.
+    _seed(conn, "a", "r1", "/r1/a.md", 1000)
+    _seed(conn, "z", "zombie", "/zombie/z.md", 1)
+    wiki = FakeWiki(roots=["r1"], files={"r1": [{"path": "/r1/a.md", "mtime_ms": 1000, "size": 1}]})
+    qstore = MagicMock()
+
+    res = await run_verify(conn, qstore, wiki, MagicMock(), root_ids=["r1"],
+                           trigger="manual", now_ms=50)
+
+    assert res["ok"] is True and res["retired_roots"] == []
+    qstore.tombstone_file.assert_not_called()
+    assert conn.execute("SELECT COUNT(*) FROM file_paths WHERE root_id='zombie'").fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_verify_reports_not_found_roots_in_the_same_shape(conn):
+    _seed(conn, "b", "r2", "/r2/b.md", 1)
+    wiki = FakeWiki(roots=["r1", "r2"], files={"r1": []})
+
+    res = await run_verify(conn, MagicMock(), wiki, MagicMock(), root_ids=None,
+                           trigger="manual", now_ms=50)
+
+    assert res["ok"] is True
+    assert res["roots"] == [_entry("r1"), _entry("r2", status="not_found", local_files=1)]
 
 
 @pytest.mark.asyncio
@@ -173,7 +212,9 @@ async def test_run_verify_reports_unavailable_files_endpoint_on_old_wiki(conn):
                            trigger="manual", now_ms=50)
 
     assert res["ok"] is False and res["error"] == "wiki files endpoint unavailable"
-    assert res["roots"] == [] and res["retired_roots"] == []
+    assert res["roots"] == [_entry("r1", status="not_found", local_files=1),
+                            _entry("r2", status="not_found")]
+    assert res["retired_roots"] == []
     pipe.delete_path.assert_not_called()
 
 
@@ -203,7 +244,7 @@ async def test_run_verify_skips_disabled_roots_without_retiring(conn):
                            trigger="manual", now_ms=50)
 
     assert res["ok"] is True and res["retired_roots"] == []
-    assert res["roots"] == [{"root_id": "gone", "skipped": "disabled"}]
+    assert res["roots"] == [_entry("gone", status="disabled", local_files=1)]
     assert wiki.file_calls == []
     assert list_jobs(conn, status="pending", limit=10) == []
     qstore.tombstone_file.assert_not_called()
@@ -223,8 +264,7 @@ async def test_run_verify_skips_extra_deletes_when_wiki_reports_zero_files(conn)
                            pipe, root_ids=None, trigger="manual", now_ms=50)
 
     assert res["ok"] is True
-    assert res["roots"] == [{"root_id": "r1", "wiki_files": 0, "local_files": 2,
-                             "missing": 0, "stale": 0, "extra": 2, "extra_skipped": 2}]
+    assert res["roots"] == [_entry("r1", local_files=2, extra=2, extra_skipped=2)]
     pipe.delete_path.assert_not_called()
     assert conn.execute("SELECT COUNT(*) FROM file_paths WHERE root_id='r1'").fetchone()[0] == 2
 

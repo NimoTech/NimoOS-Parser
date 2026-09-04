@@ -93,6 +93,16 @@ def _local_files(conn, root_id: str) -> dict:
         "SELECT path, mtime_ms FROM file_paths WHERE root_id = ?", (root_id,))}
 
 
+def _root_entry(root_id: str, status: str, **counts) -> dict:
+    """One element of verify_last.roots. Every status carries the same keys
+    (zeros where nothing was compared) so consumers render a single row type:
+    status ∈ {"verified", "disabled", "not_found"}."""
+    e = {"root_id": root_id, "status": status, "wiki_files": 0, "local_files": 0,
+         "missing": 0, "stale": 0, "extra": 0, "extra_skipped": 0}
+    e.update(counts)
+    return e
+
+
 def _local_roots(conn) -> set:
     return {r[0] for r in conn.execute("SELECT DISTINCT root_id FROM file_paths")}
 
@@ -181,12 +191,14 @@ async def run_verify(conn, qstore, wiki, text_pipeline, *, root_ids, trigger: st
                       len(await asyncio.to_thread(_local_roots, conn)))
             return await _land("wiki returned no roots")
 
-        local_roots = await asyncio.to_thread(_local_roots, conn)
-        for rid in sorted(local_roots - set(wiki_roots)):
-            await asyncio.to_thread(retire_root, conn, qstore, root_id=rid, now_ms=now_ms)
-            res["retired_roots"].append(rid)
-
         if root_ids is None:
+            # Retiring roots Wiki no longer lists is a whole-ledger
+            # reconciliation; a verify scoped to named roots must not have
+            # side effects on roots the caller did not name.
+            local_roots = await asyncio.to_thread(_local_roots, conn)
+            for rid in sorted(local_roots - set(wiki_roots)):
+                await asyncio.to_thread(retire_root, conn, qstore, root_id=rid, now_ms=now_ms)
+                res["retired_roots"].append(rid)
             targets = sorted(wiki_roots)
         else:
             targets = [r for r in root_ids if r in wiki_roots]
@@ -197,12 +209,13 @@ async def run_verify(conn, qstore, wiki, text_pipeline, *, root_ids, trigger: st
 
         attempted = not_found = 0
         for rid in targets:
+            local = await asyncio.to_thread(_local_files, conn, rid)
             if not wiki_roots[rid].get("enabled", True):
                 # Wiki disables a root when its disk vanishes but keeps the
                 # file_index. The root is present (never retire it) yet its
                 # files are unreachable, so missing/stale enqueues would only
                 # burn worker attempts.
-                res["roots"].append({"root_id": rid, "skipped": "disabled"})
+                res["roots"].append(_root_entry(rid, "disabled", local_files=len(local)))
                 continue
             attempted += 1
             try:
@@ -211,12 +224,12 @@ async def run_verify(conn, qstore, wiki, text_pipeline, *, root_ids, trigger: st
                 not_found += 1
                 log.warning("verify: root %s not served by wiki /_internal/files; "
                             "skipping", rid)
+                res["roots"].append(_root_entry(rid, "not_found", local_files=len(local)))
                 continue
-            local = await asyncio.to_thread(_local_files, conn, rid)
             diff = diff_root(wiki_files, local)
-            entry = {"root_id": rid, "wiki_files": len(wiki_files),
-                     "local_files": len(local), "missing": len(diff.missing),
-                     "stale": len(diff.stale), "extra": len(diff.extra)}
+            entry = _root_entry(rid, "verified", wiki_files=len(wiki_files),
+                                local_files=len(local), missing=len(diff.missing),
+                                stale=len(diff.stale), extra=len(diff.extra))
             # Mass-deletion guard: an empty Wiki side for a root we do hold
             # records for is as likely a broken file_index as a genuinely
             # emptied root, and delete_path is not reversible.

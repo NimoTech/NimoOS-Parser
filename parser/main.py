@@ -183,9 +183,13 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
                 app_state.worker_pool.text_pipeline,
             )
 
-            async def on_gap(gap: dict) -> None:
-                if not app_state.verify_runner.start(root_ids=None, trigger="cursor_gap"):
-                    log.info("cursor gap detected while a verify is already running; skipped")
+            async def on_gap(gap: dict) -> bool:
+                # False = refused: the consumer keeps the gap untriggered and
+                # retries next poll, so the gap's own verify is never lost.
+                started = app_state.verify_runner.start(root_ids=None, trigger="cursor_gap")
+                if not started:
+                    log.info("cursor gap detected while a verify is already running; retrying later")
+                return started
 
         app_state.consumer = WikiConsumer(
             app_state.conn, app_state.wiki_client,
