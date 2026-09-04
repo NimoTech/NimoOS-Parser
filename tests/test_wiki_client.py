@@ -33,14 +33,54 @@ async def test_report_index_status(httpx_mock):
 
 
 @pytest.mark.asyncio
-async def test_list_roots(httpx_mock):
+async def test_list_roots_normalizes_wiki_shape(httpx_mock):
+    # Wiki returns a bare array with Go-cased keys (route/v1/roots.go listRoots).
+    httpx_mock.add_response(
+        url="http://wiki/v1/wiki/roots",
+        json=[{"ID": "root1", "Path": "/DATA", "Enabled": True, "Level": "space"}],
+    )
+    c = WikiClient(base_url="http://wiki")
+    out = await c.list_roots()
+    assert out == [{"id": "root1", "path": "/DATA", "enabled": True}]
+
+
+@pytest.mark.asyncio
+async def test_list_roots_accepts_legacy_wrapped_shape(httpx_mock):
     httpx_mock.add_response(
         url="http://wiki/v1/wiki/roots",
         json={"roots": [{"id": "root1", "path": "/DATA", "enabled": 1}]},
     )
     c = WikiClient(base_url="http://wiki")
-    out = await c.list_roots()
-    assert out[0]["id"] == "root1"
+    assert await c.list_roots() == [{"id": "root1", "path": "/DATA", "enabled": True}]
+
+
+@pytest.mark.asyncio
+async def test_fetch_file_events_page_returns_whole_body(httpx_mock):
+    httpx_mock.add_response(
+        url="http://wiki/v1/wiki/_internal/file-events?since=10&after_seq=0&limit=100",
+        json={"events": [], "archive_cutoff_ms": 123, "has_archived": True},
+    )
+    c = WikiClient(base_url="http://wiki")
+    page = await c.fetch_file_events_page(since_ms=10, limit=100)
+    assert page["archive_cutoff_ms"] == 123 and page["has_archived"] is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_root_files_pages_and_404(httpx_mock):
+    httpx_mock.add_response(
+        url="http://wiki/v1/wiki/_internal/files?root_id=r1&after=&limit=2",
+        json={"files": [{"path": "/DATA/a.md", "mtime_ms": 1, "size": 1}], "next_after": ""},
+    )
+    httpx_mock.add_response(
+        url="http://wiki/v1/wiki/_internal/files?root_id=gone&after=&limit=1000",
+        status_code=404, json={"message": "root not found"},
+    )
+    c = WikiClient(base_url="http://wiki")
+    page = await c.fetch_root_files("r1", limit=2)
+    assert page["files"][0]["path"] == "/DATA/a.md" and page["next_after"] == ""
+    from parser.wiki_client import WikiRootNotFound
+    with pytest.raises(WikiRootNotFound):
+        await c.fetch_root_files("gone")
 
 
 @pytest.mark.asyncio

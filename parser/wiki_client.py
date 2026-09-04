@@ -7,6 +7,10 @@ import httpx
 log = logging.getLogger("parser.wiki_client")
 
 
+class WikiRootNotFound(Exception):
+    """Wiki has no such root (404 from /_internal/files)."""
+
+
 class WikiClient:
     def __init__(self, base_url: str, *, discovery_path: str | None = None,
                  timeout: float = 10.0) -> None:
@@ -49,15 +53,26 @@ class WikiClient:
                 log.info("wiki base_url re-resolved to %s", fresh)
             return await self._client.request(method, path, **kw)
 
-    async def fetch_file_events(
+    async def fetch_file_events_page(
         self, *, since_ms: int, after_seq: int = 0, limit: int = 200,
-    ) -> list[dict]:
+    ) -> dict:
+        """Whole feed page: `events` plus, on Wiki >= 2026-09, the archive
+        horizon (`archive_cutoff_ms`, `has_archived`) the consumer uses to
+        detect a cursor that fell behind the archive line."""
         r = await self._request(
             "GET", "/v1/wiki/_internal/file-events",
             params={"since": since_ms, "after_seq": after_seq, "limit": limit},
         )
         r.raise_for_status()
-        return r.json().get("events", [])
+        body = r.json()
+        return body if isinstance(body, dict) else {"events": body}
+
+    async def fetch_file_events(
+        self, *, since_ms: int, after_seq: int = 0, limit: int = 200,
+    ) -> list[dict]:
+        page = await self.fetch_file_events_page(
+            since_ms=since_ms, after_seq=after_seq, limit=limit)
+        return page.get("events", [])
 
     async def report_index_status(
         self, *, path: str, status: str, parser_version: str,
@@ -77,9 +92,35 @@ class WikiClient:
         r.raise_for_status()
 
     async def list_roots(self) -> list[dict]:
+        """Normalized `[{"id","path","enabled"}]`. Wiki's GET /v1/wiki/roots
+        returns a bare array with Go-cased keys; the wrapped lower-case shape
+        is accepted for older fixtures."""
         r = await self._request("GET", "/v1/wiki/roots")
         r.raise_for_status()
-        return r.json().get("roots", [])
+        body = r.json()
+        rows = body.get("roots", []) if isinstance(body, dict) else body
+        out = []
+        for row in rows or []:
+            rid = row.get("id") or row.get("ID")
+            if not rid:
+                continue
+            out.append({
+                "id": rid,
+                "path": row.get("path") if "path" in row else row.get("Path", ""),
+                "enabled": bool(row.get("enabled") if "enabled" in row else row.get("Enabled", True)),
+            })
+        return out
+
+    async def fetch_root_files(self, root_id: str, *, after: str = "",
+                               limit: int = 1000) -> dict:
+        r = await self._request(
+            "GET", "/v1/wiki/_internal/files",
+            params={"root_id": root_id, "after": after, "limit": limit},
+        )
+        if r.status_code == 404:
+            raise WikiRootNotFound(root_id)
+        r.raise_for_status()
+        return r.json()
 
     async def aclose(self) -> None:
         await self._client.aclose()
