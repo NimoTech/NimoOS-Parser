@@ -6,6 +6,7 @@ import time
 
 from parser.repo_jobs import enqueue_job
 from parser.repo_models import get_wiki_cursor, set_wiki_cursor
+from parser.repo_state import get_cursor_gap, set_cursor_gap
 
 log = logging.getLogger("parser.wiki_consumer")
 
@@ -61,11 +62,13 @@ class WikiConsumer:
     def __init__(
         self, conn: sqlite3.Connection, wiki, *,
         poll_interval_s: float = 2.0, poll_limit: int = 200,
+        on_gap=None,
     ) -> None:
         self.conn = conn
         self.wiki = wiki
         self.poll_interval_s = poll_interval_s
         self.poll_limit = poll_limit
+        self.on_gap = on_gap
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
 
@@ -84,11 +87,13 @@ class WikiConsumer:
         while not self._stop.is_set():
             try:
                 since, seq = await asyncio.to_thread(get_wiki_cursor, self.conn)
-                events = await self.wiki.fetch_file_events(
+                page = await self.wiki.fetch_file_events_page(
                     since_ms=since, after_seq=seq, limit=self.poll_limit,
                 )
+                events = page.get("events", [])
                 if events:
                     await asyncio.to_thread(self._ingest, events)
+                await self._check_archive_gap(page, since, seq)
                 backoff = self.poll_interval_s
             except Exception as e:
                 log.warning("wiki fetch failed: %s; backing off %ss", e, backoff)
@@ -97,6 +102,32 @@ class WikiConsumer:
                 await asyncio.wait_for(self._stop.wait(), timeout=backoff)
             except asyncio.TimeoutError:
                 pass
+
+    async def _check_archive_gap(self, page: dict, since_ms: int, last_seq: int) -> None:
+        """Wiki archives file_events after keepDays; the feed only serves
+        archived=0. A cursor older than the archive cutoff means the events in
+        between are gone for good. Record it once, hand it to on_gap (which
+        runs a verify), and clear once the cursor is back inside the horizon.
+        since_ms == 0 is a fresh Parser, not a gap. Old Wikis send neither
+        field: no detection."""
+        cutoff = page.get("archive_cutoff_ms")
+        if cutoff is None or not page.get("has_archived"):
+            return
+        # Re-read: _ingest may just have advanced the cursor past the cutoff.
+        cur_since, cur_seq = await asyncio.to_thread(get_wiki_cursor, self.conn)
+        behind = cur_since > 0 and cur_since < cutoff
+        existing = await asyncio.to_thread(get_cursor_gap, self.conn)
+        if behind and existing is None:
+            gap = {"detected_at": int(time.time() * 1000), "since_ms": cur_since,
+                   "last_seq": cur_seq, "archive_cutoff_ms": int(cutoff)}
+            await asyncio.to_thread(set_cursor_gap, self.conn, gap)
+            log.warning("wiki cursor %s is behind the archive cutoff %s: events were archived "
+                        "before we consumed them; running verify", cur_since, cutoff)
+            if self.on_gap is not None:
+                await self.on_gap(gap)
+        elif not behind and existing is not None:
+            await asyncio.to_thread(set_cursor_gap, self.conn, None)
+            log.info("wiki cursor back inside the archive horizon; gap cleared")
 
     def _ingest(self, events: list[dict]) -> None:
         if not events:  # _loop guards this; keep future direct callers safe
