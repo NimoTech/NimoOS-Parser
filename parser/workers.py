@@ -15,6 +15,16 @@ from parser.service_retire import retire_root
 log = logging.getLogger("parser.workers")
 
 
+def _wants_wiki_receipt(op: str) -> bool:
+    # visual ops (visual asset ingest) don't go through the Wiki receipt
+    # protocol - that's the confirmation channel for Wiki file-type jobs;
+    # visual_ingest's caller is Photos. retire_root jobs answer a
+    # root_removed event: the root no longer exists in Wiki, so there is
+    # nothing to send a receipt to - on success (handled via _process's
+    # `return True`) or on failure/retry.
+    return not op.startswith("visual") and op != "retire_root"
+
+
 class WorkerPool:
     _WINDOW_S = 600.0
 
@@ -188,10 +198,7 @@ class WorkerPool:
                     set_last_error, self.conn,
                     root_id=job["root_id"], path=job["path"], error=None,
                 )
-                # visual ops (visual asset ingest) don't go through the Wiki
-                # receipt protocol - that's the confirmation channel for Wiki
-                # file-type jobs; visual_ingest's caller is Photos.
-                if not skipped and not job["op"].startswith("visual"):
+                if not skipped and _wants_wiki_receipt(job["op"]):
                     await self._notify_wiki(job, status="indexed" if job["op"] != "delete" else "deleted")
             except Exception as e:
                 log.exception("worker %s failed job id=%s", worker_id, job["id"])
@@ -207,7 +214,7 @@ class WorkerPool:
                     set_last_error, self.conn,
                     root_id=job["root_id"], path=job["path"], error=str(e),
                 )
-                if not job["op"].startswith("visual"):
+                if _wants_wiki_receipt(job["op"]):
                     await self._notify_wiki(job, status="failed", error=str(e))
 
             delay = self._pacing_delay()
