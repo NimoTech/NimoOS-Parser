@@ -27,6 +27,7 @@ class AppState:
     gc_task: Optional[asyncio.Task] = None
     tombstone_task: Optional[asyncio.Task] = None
     tombstone_wake: Optional[asyncio.Event] = None
+    verify_runner: object = None
 
 
 app_state = AppState()
