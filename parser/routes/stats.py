@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from parser.repo_jobs import list_jobs
 from parser.repo_models import get_active_models, get_wiki_cursor
+from parser.repo_state import get_cursor_gap, get_verify_last
 
 router = APIRouter(prefix="/v1/parser", tags=["stats"])
 
@@ -24,6 +25,13 @@ def get_wiki_cursor_val(conn):
 def get_pool():
     from parser.main import app_state
     return getattr(app_state, "worker_pool", None)
+
+
+def _wiki_cursor(conn) -> dict:
+    since_ms, last_seq = get_wiki_cursor(conn)
+    gap = get_cursor_gap(conn)
+    return {"since_ms": since_ms, "last_seq": last_seq, "gap": gap is not None,
+            "gap_detected_at": gap["detected_at"] if gap else None}
 
 
 @router.get("/stats")
@@ -60,4 +68,6 @@ async def stats() -> dict:
         "done_last_10m": tp["done_last_10m"],
         "rate_per_min": tp["rate_per_min"],
         "eta_s": eta_s,
+        "wiki_cursor": _wiki_cursor(conn),
+        "verify_last": get_verify_last(conn),
     }

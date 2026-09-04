@@ -1,6 +1,7 @@
 import time
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from parser.repo_allowlist import is_path_indexable
@@ -15,21 +16,28 @@ def get_conn():
     return app_state.conn
 
 
+def get_verify_runner():
+    from parser.main import app_state
+    return getattr(app_state, "verify_runner", None)
+
+
 class RescanRequest(BaseModel):
-    root_id: str
     op: str
+    root_id: Optional[str] = None
 
 
-@router.post("/rescan")
-async def rescan(req: RescanRequest) -> dict:
-    """Force-rescan a Root.
+@router.post("/rescan", status_code=200)
+async def rescan(req: RescanRequest, response: Response) -> dict:
+    """Force-rescan.
 
-    `op=reindex` — enqueue a reindex job per known path under this root.
-    `op=verify` — NOT YET IMPLEMENTED. Future: walk the root, sha256 each
-      file, compare with file_records, enqueue reindex only for drifted ones.
-      Returning 501 here prevents the silent downgrade-to-index footgun.
+    `op=reindex` (root_id required) — enqueue a reindex job per known path.
+    `op=verify`  (root_id optional) — reconcile Parser's ledger against Wiki's
+      file_index in the background (service_verify); 202 on start, 409 while
+      a verify is already running. Result lands in GET /stats `verify_last`.
     """
     if req.op == "reindex":
+        if not req.root_id:
+            raise HTTPException(400, "root_id is required for op='reindex'")
         conn = get_conn()
         rows = list_paths_under_root(conn, req.root_id)
         now = int(time.time() * 1000)
@@ -42,7 +50,11 @@ async def rescan(req: RescanRequest) -> dict:
             queued += 1
         return {"queued": queued}
     if req.op == "verify":
-        raise HTTPException(
-            501, "op='verify' is not implemented; use op='reindex' for now"
-        )
+        runner = get_verify_runner()
+        if runner is None:
+            raise HTTPException(503, "verify unavailable (wiki or qdrant not wired)")
+        if not runner.start(root_ids=[req.root_id] if req.root_id else None, trigger="manual"):
+            raise HTTPException(409, "a verify is already running")
+        response.status_code = 202
+        return {"started": True, "trigger": "manual"}
     raise HTTPException(400, "op must be 'reindex' or 'verify'")

@@ -28,16 +28,37 @@ def test_rescan_invalid_op(client):
     assert r.status_code == 400
 
 
-def test_rescan_verify_returns_501(client, monkeypatch, tmp_path):
-    # I4: verify is a real op name in the spec but the implementation isn't
-    # ready. Refuse explicitly rather than silently downgrading to index.
-    conn = init_db(tmp_path / "p.db")
-    monkeypatch.setattr("parser.routes.rescan.get_conn", lambda: conn)
-    r = client.post("/v1/parser/rescan",
-                     json={"root_id": "root1", "op": "verify"})
-    assert r.status_code == 501
-    # And no jobs were enqueued
-    assert list_jobs(conn, status="pending", limit=10) == []
+def test_rescan_verify_starts_runner_and_refuses_concurrent(client, monkeypatch, tmp_path):
+    class FakeRunner:
+        def __init__(self): self.calls = []; self._running = False
+        @property
+        def running(self): return self._running
+        def start(self, *, root_ids, trigger):
+            if self._running: return False
+            self._running = True; self.calls.append((root_ids, trigger)); return True
+    runner = FakeRunner()
+    from parser.main import app_state
+    monkeypatch.setattr(app_state, "verify_runner", runner, raising=False)
+
+    r = client.post("/v1/parser/rescan", json={"op": "verify"})
+    assert r.status_code == 202
+    assert r.json() == {"started": True, "trigger": "manual"}
+    assert runner.calls == [(None, "manual")]
+
+    r = client.post("/v1/parser/rescan", json={"op": "verify", "root_id": "r1"})
+    assert r.status_code == 409
+
+
+def test_rescan_verify_503_without_runner(client, monkeypatch):
+    from parser.main import app_state
+    monkeypatch.setattr(app_state, "verify_runner", None, raising=False)
+    r = client.post("/v1/parser/rescan", json={"op": "verify"})
+    assert r.status_code == 503
+
+
+def test_rescan_reindex_requires_root_id(client):
+    r = client.post("/v1/parser/rescan", json={"op": "reindex"})
+    assert r.status_code == 400
 
 
 def test_rescan_reindex_skips_paths_no_longer_indexable(client, monkeypatch, tmp_path):
