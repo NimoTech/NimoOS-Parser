@@ -362,3 +362,31 @@ def test_worker_dispatches_retire_root_and_sends_no_wiki_receipt(conn):
     assert conn.execute("SELECT COUNT(*) FROM file_paths WHERE root_id='gone'").fetchone()[0] == 0
     assert list_jobs(conn, status="failed", limit=10) == []
     assert wiki.calls == [], "a retired root has no Wiki to receive a receipt"
+
+
+def test_worker_retire_root_failure_sends_no_wiki_receipt(conn):
+    # Real case: Qdrant is down (qstore is None) while a file still has a
+    # path under the root being retired, so retire_root raises. The retry
+    # must not tell Wiki "failed" for a root Wiki already deleted.
+    from parser.repo_records import upsert_file_path, upsert_file_record
+    upsert_file_record(conn, file_id="f1", sha256_full="s1", size=1, mime="text/plain",
+                       modalities_done={"text": "v1"}, parser_version="parser/0.3.0", indexed_at=1)
+    upsert_file_path(conn, root_id="gone", path="/mnt/a.md", file_id="f1", mtime_ms=1)
+    enqueue_job(conn, root_id="gone", path="", op="retire_root", priority=50, now_ms=100)
+    wiki = FakeWiki()
+    pool = WorkerPool(conn, text_pipeline=FakePipeline(), concurrency=1, lease_s=10,
+                      wiki_client=wiki, qstore=None, max_attempts=1, idle_sleep_s=0.01)
+
+    async def runner():
+        await pool.start()
+        for _ in range(200):
+            if list_jobs(conn, status="failed", limit=10):
+                break
+            await asyncio.sleep(0.05)
+        await pool.stop()
+
+    asyncio.run(runner())
+    failed = list_jobs(conn, status="failed", limit=10)
+    assert len(failed) == 1
+    assert "qdrant" in failed[0]["last_error"].lower()
+    assert wiki.calls == [], "a retired root has no Wiki to receive a failure receipt either"
