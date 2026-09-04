@@ -58,7 +58,14 @@ def test_count_vectors_never_reads_visual_chunks():
     assert {c[0] for c in s.client.calls} == {"text_chunks"}
 
 
-def test_count_vectors_filtered_counts_are_exact():
+def test_count_vectors_caption_count_is_exact_and_text_avoids_a_filtered_scan():
     s = _store(["body", "caption"])
     s.count_vectors()
-    assert all(exact is True for _, _, exact in s.client.calls)
+    filtered = [(f, exact) for _, f, exact in s.client.calls if f is not None]
+    assert filtered and all(exact is True for _, exact in filtered)
+    assert all(f.must_not is None for f, _ in filtered)
+
+
+def test_count_vectors_treats_legacy_points_without_kind_as_text():
+    s = _store([None, None, "body", "caption"])
+    assert s.count_vectors() == {"text": 3, "visual": 1}
