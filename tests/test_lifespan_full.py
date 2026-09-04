@@ -25,6 +25,7 @@ def reset_app_state():
     app_state.worker_pool = None
     app_state.wiki_client = None
     app_state.gc_task = None
+    app_state.verify_runner = None
     yield
 
 
@@ -110,6 +111,20 @@ def test_skip_workers_does_not_start_worker_pool(tmp_path, monkeypatch):
         assert app_state.qstore is None
         assert app_state.consumer is None
         assert app_state.worker_pool is None
+
+
+def test_full_lifecycle_wires_verify_runner_only_with_wiki_and_qdrant(tmp_path, monkeypatch):
+    # Qdrant is unreachable in this env -> qstore None -> no runner (503 on verify).
+    _set_env(monkeypatch, tmp_path)
+    (tmp_path / "wiki.url").write_text("http://127.0.0.1:1")
+    from parser.main import app_state, create_app
+    app = create_app(skip_workers=False)
+    with TestClient(app) as c:
+        assert app_state.wiki_client is not None
+        assert app_state.qstore is None
+        assert app_state.verify_runner is None
+        assert c.post("/v1/parser/rescan", json={"op": "verify"}).status_code == 503
+        assert app_state.consumer is not None and app_state.consumer.on_gap is None
 
 
 def test_full_lifecycle_runs_allowlist_sweep_once_at_startup(tmp_path, monkeypatch):

@@ -165,10 +165,23 @@ async def _full_lifecycle_startup(app: FastAPI) -> None:
             log.exception("parser_version drift sweep failed; continuing")
 
     if app_state.wiki_client is not None:
+        on_gap = None
+        if app_state.qstore is not None and app_state.worker_pool is not None:
+            from parser.service_verify import VerifyRunner
+            app_state.verify_runner = VerifyRunner(
+                app_state.conn, app_state.qstore, app_state.wiki_client,
+                app_state.worker_pool.text_pipeline,
+            )
+
+            async def on_gap(gap: dict) -> None:
+                if not app_state.verify_runner.start(root_ids=None, trigger="cursor_gap"):
+                    log.info("cursor gap detected while a verify is already running; skipped")
+
         app_state.consumer = WikiConsumer(
             app_state.conn, app_state.wiki_client,
             poll_interval_s=settings.wiki_poll_interval_s,
             poll_limit=settings.wiki_poll_limit,
+            on_gap=on_gap,
         )
         await app_state.consumer.start()
 
@@ -227,6 +240,7 @@ async def _full_lifecycle_shutdown() -> None:
         except Exception as e:
             log.warning("consumer stop failed: %s", e)
         app_state.consumer = None
+    app_state.verify_runner = None
     if app_state.worker_pool is not None:
         try:
             await app_state.worker_pool.stop()
