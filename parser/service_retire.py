@@ -17,21 +17,35 @@ log = logging.getLogger("parser.service_retire")
 
 def retire_root(conn: sqlite3.Connection, qstore, *, root_id: str, now_ms: int) -> dict:
     file_ids = [r[0] for r in conn.execute(
-        "SELECT DISTINCT file_id FROM file_paths WHERE root_id = ?", (root_id,))]
+        "SELECT DISTINCT file_id FROM file_paths WHERE root_id = ? ORDER BY file_id",
+        (root_id,))]
     out = {"root_id": root_id, "files_seen": len(file_ids), "tombstoned": 0,
            "rehomed": 0, "jobs_dropped": 0}
     if file_ids and qstore is None:
         raise RuntimeError("qdrant unavailable: cannot retire root %s" % root_id)
 
-    conn.execute("DELETE FROM file_paths WHERE root_id = ?", (root_id,))
+    # Update Qdrant BEFORE touching SQLite for each file, so a mid-loop
+    # qstore failure leaves that file (and every file not yet processed)
+    # untouched in file_paths/file_records — a retry of retire_root simply
+    # redoes the files that never got past the qstore call. (The connection
+    # is opened with isolation_level=None/autocommit, so each conn.execute
+    # commits immediately; there is no transaction to roll back on failure.)
     for fid in file_ids:
-        remaining = sorted({r["root_id"] for r in list_paths_for_file(conn, fid)})
+        remaining = sorted(
+            {r["root_id"] for r in list_paths_for_file(conn, fid)} - {root_id}
+        )
         if remaining:
             qstore.set_root_ids_for_file(file_id=fid, root_ids=remaining)
+            conn.execute(
+                "DELETE FROM file_paths WHERE root_id = ? AND file_id = ?",
+                (root_id, fid))
             out["rehomed"] += 1
         else:
-            set_tombstone(conn, file_id=fid, at_ms=now_ms)
             qstore.tombstone_file(file_id=fid, tombstoned_at=now_ms)
+            conn.execute(
+                "DELETE FROM file_paths WHERE root_id = ? AND file_id = ?",
+                (root_id, fid))
+            set_tombstone(conn, file_id=fid, at_ms=now_ms)
             out["tombstoned"] += 1
 
     cur = conn.execute(

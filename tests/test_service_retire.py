@@ -53,3 +53,54 @@ def test_retire_root_requires_qdrant(conn):
         retire_root(conn, None, root_id="r1", now_ms=1)
     assert conn.execute("SELECT COUNT(*) FROM file_paths WHERE root_id='r1'").fetchone()[0] == 1, \
         "nothing is removed from SQLite when Qdrant can't be updated"
+
+
+def test_retire_root_partial_qstore_failure_leaves_unprocessed_files_retryable(conn):
+    _seed(conn, "f1", [("r1", "/mnt/f1.md")])
+    _seed(conn, "f2", [("r1", "/mnt/f2.md")])
+    _seed(conn, "f3", [("r1", "/mnt/f3.md")])
+    qstore = MagicMock()
+    qstore.tombstone_file.side_effect = [None, RuntimeError("qdrant down"), None]
+
+    with pytest.raises(RuntimeError):
+        retire_root(conn, qstore, root_id="r1", now_ms=999)
+
+    # f1 (processed first, per ORDER BY file_id) is fully retired.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM file_paths WHERE root_id='r1' AND file_id='f1'"
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT tombstoned_at FROM file_records WHERE file_id='f1'"
+    ).fetchone()[0] == 999
+    # f2 (the one whose qstore call raised) and f3 (never reached) are
+    # untouched in SQLite, so a retry will redo exactly them.
+    for fid in ("f2", "f3"):
+        assert conn.execute(
+            "SELECT COUNT(*) FROM file_paths WHERE root_id='r1' AND file_id=?", (fid,)
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT tombstoned_at FROM file_records WHERE file_id=?", (fid,)
+        ).fetchone()[0] is None
+
+    qstore.tombstone_file.side_effect = None
+    out = retire_root(conn, qstore, root_id="r1", now_ms=1000)
+
+    assert out["files_seen"] == 2
+    assert out["tombstoned"] == 2
+    assert conn.execute(
+        "SELECT COUNT(*) FROM file_paths WHERE root_id='r1'"
+    ).fetchone()[0] == 0
+
+
+def test_retire_root_keeps_its_own_in_flight_job(conn):
+    _seed(conn, "only", [("r1", "/mnt/a.md")])
+    enqueue_job(conn, root_id="r1", path="", op="retire_root", priority=0, now_ms=1)
+    enqueue_job(conn, root_id="r1", path="/mnt/a.md", op="index", priority=100, now_ms=1)
+    qstore = MagicMock()
+
+    out = retire_root(conn, qstore, root_id="r1", now_ms=999)
+
+    assert out["jobs_dropped"] == 1
+    remaining = list_jobs(conn, status="pending", limit=10)
+    assert [j["op"] for j in remaining] == ["retire_root"], \
+        "the in-flight retire_root job itself must survive; the worker completes it"
