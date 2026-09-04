@@ -96,3 +96,22 @@ def test_init_db_keeps_temp_store_off_the_heap(tmp_path):
     conn = init_db(tmp_path / "p.db")
     temp_store = conn.execute("PRAGMA temp_store").fetchone()[0]
     assert temp_store != 2
+
+
+def test_init_db_migrates_parser_state_json_columns(tmp_path):
+    # Simulate a pre-2026-09 DB that lacks the two JSON columns.
+    import sqlite3
+    p = tmp_path / "old.db"
+    c = sqlite3.connect(p)
+    c.execute("""CREATE TABLE parser_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1), paused INTEGER NOT NULL DEFAULT 0,
+        concurrency INTEGER NOT NULL DEFAULT 2, device TEXT NOT NULL DEFAULT 'auto',
+        ocr_enabled INTEGER NOT NULL DEFAULT 0, ocr_model TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL)""")
+    c.execute("INSERT INTO parser_state(id, updated_at) VALUES (1, 0)")
+    c.commit(); c.close()
+    conn = init_db(p)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(parser_state)")}
+    assert {"cursor_gap", "verify_last"} <= cols
+    row = conn.execute("SELECT cursor_gap, verify_last FROM parser_state WHERE id=1").fetchone()
+    assert tuple(row) == (None, None)
