@@ -109,3 +109,43 @@ async def test_wiki_client_rereads_discovery_on_connect_error(tmp_path, monkeypa
     assert events == []
     assert calls[0].startswith("http://127.0.0.1:59998")
     assert calls[1].startswith("http://127.0.0.1:59999")
+
+
+@pytest.mark.asyncio
+async def test_list_roots_warns_on_partially_unusable_rows(httpx_mock, caplog):
+    # Wiki's repo.WikiRoot has no json tags: one struct-tag change and the
+    # rows arrive under keys we don't know. Dropping them silently is what
+    # made verify retire the whole ledger, so at least count and log them.
+    httpx_mock.add_response(
+        url="http://wiki/v1/wiki/roots",
+        json=[{"ID": "root1", "Path": "/DATA", "Enabled": True},
+              {"Identifier": "root2", "Path": "/mnt", "Enabled": True}],
+    )
+    c = WikiClient(base_url="http://wiki")
+    with caplog.at_level("WARNING", logger="parser.wiki_client"):
+        out = await c.list_roots()
+    assert [r["id"] for r in out] == ["root1"]
+    assert "dropped 1 of 2" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_list_roots_raises_when_every_row_lacks_an_id(httpx_mock):
+    # All rows unusable == "we cannot tell what Wiki holds". Raising routes
+    # verify onto its failure path instead of an empty-roots answer.
+    httpx_mock.add_response(
+        url="http://wiki/v1/wiki/roots",
+        json=[{"Identifier": "root1", "Path": "/DATA"},
+              {"Identifier": "root2", "Path": "/mnt"}],
+    )
+    c = WikiClient(base_url="http://wiki")
+    with pytest.raises(RuntimeError, match="no usable ids"):
+        await c.list_roots()
+
+
+@pytest.mark.asyncio
+async def test_list_roots_empty_listing_is_not_an_error(httpx_mock):
+    # A genuinely empty Wiki must still return []; run_verify is the layer
+    # that refuses to act on it.
+    httpx_mock.add_response(url="http://wiki/v1/wiki/roots", json=[])
+    c = WikiClient(base_url="http://wiki")
+    assert await c.list_roots() == []

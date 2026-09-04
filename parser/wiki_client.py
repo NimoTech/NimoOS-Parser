@@ -99,16 +99,29 @@ class WikiClient:
         r.raise_for_status()
         body = r.json()
         rows = body.get("roots", []) if isinstance(body, dict) else body
+        rows = rows or []
         out = []
-        for row in rows or []:
+        dropped = 0
+        for row in rows:
             rid = row.get("id") or row.get("ID")
             if not rid:
+                # Wiki's repo.WikiRoot carries no json tags, so the wire keys
+                # follow the Go field names: one rename upstream and every row
+                # lands here. Silently returning [] told verify "Wiki holds no
+                # roots" and it retired the whole ledger — count, log, and
+                # refuse outright when nothing is usable.
+                dropped += 1
                 continue
             out.append({
                 "id": rid,
                 "path": row.get("path") if "path" in row else row.get("Path", ""),
                 "enabled": bool(row.get("enabled") if "enabled" in row else row.get("Enabled", True)),
             })
+        if dropped:
+            log.warning("wiki roots: dropped %d of %d rows with no usable id",
+                        dropped, len(rows))
+            if not out:
+                raise RuntimeError("wiki roots response has no usable ids")
         return out
 
     async def fetch_root_files(self, root_id: str, *, after: str = "",
