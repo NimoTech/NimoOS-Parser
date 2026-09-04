@@ -9,7 +9,11 @@ Three classes per root:
   missing  Wiki has it, Parser doesn't  -> index job (priority 500), allowlist-gated
   stale    |mtime_wiki - mtime_local| > tolerance -> reindex job (priority 500)
   extra    Parser has it, Wiki doesn't  -> delete_path now
-Roots Parser holds that Wiki no longer lists are retired wholesale.
+Roots Parser holds that Wiki no longer lists are retired wholesale — unless
+Wiki's roots listing came back empty, which is treated as "Wiki cannot tell
+us" and refused outright rather than read as "Wiki holds nothing". Roots Wiki
+lists but has disabled (its disk vanished; the file_index survives) count as
+present and are skipped, never retired.
 """
 import asyncio
 import logging
