@@ -20,11 +20,32 @@ CONTAINER_DIRS = frozenset({
 
 CONTAINER_DIR_PREFIXES = (".Trash-",)
 
+# Absolute directory prefixes Parser never indexes as documents, in any root.
+# /DATA/Notes is the agent's knowledge-notes layer (NimoOS-AI
+# agent/notes/store.py DEFAULT_NOTES_ROOT). Every note there is already
+# embedded into the dedicated `notes` collection, so indexing the .md files
+# again only hands the answer model its own past answers plus the layer's
+# log.md/index.md bookkeeping (2026-09-09 Intel2408 ask eval: 18% of evidence
+# items came from here, 18/55 questions saw notes distilled earlier in the
+# same run). Like CONTAINER_DIRS this beats an explicit allow rule.
+GATED_PATH_PREFIXES = ("/DATA/Notes/",)
+
 
 def is_container_dir(basename: str) -> bool:
     if basename in CONTAINER_DIRS:
         return True
     return any(basename.startswith(p) for p in CONTAINER_DIR_PREFIXES)
+
+
+def has_gated_prefix(path: str) -> bool:
+    """True when `path` (normalised) lies under one of GATED_PATH_PREFIXES."""
+    norm = posixpath.normpath(path)
+    return any(norm.startswith(p) for p in GATED_PATH_PREFIXES)
+
+
+def is_gated_path(path: str) -> bool:
+    """Single non-configurable gate: container-dir ancestor OR gated prefix."""
+    return has_container_ancestor(path) or has_gated_prefix(path)
 
 
 def has_container_ancestor(path: str) -> bool:
