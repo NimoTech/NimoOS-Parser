@@ -133,3 +133,15 @@ def test_pipeline_text_run_full_skipped_via_db(conn, tmp_path):
     pipe._run_full(root_id="r1", path=str(f), file_id="fid",
                    sha256_full="abc", now_ms=1)
     assert upserts == []  # nothing was embedded or upserted
+
+
+def test_notes_root_beats_explicit_allow_rule(conn):
+    # /DATA/Notes/** is the agent notes layer (already indexed via the notes
+    # collection); the pathgate prefix is not configurable, so even an allow
+    # rule and an enabled extension cannot re-admit it.
+    ra.add_folder_rule(conn, root_id="r1", path_glob="/DATA/Notes/*", action="allow")
+    conn.commit()
+    assert ra.is_extension_enabled(conn, ".md")
+    assert not ra.is_path_indexable(conn, root_id="r1", path="/DATA/Notes/1/log.md")
+    assert not ra.is_path_indexable(conn, root_id="r1", path="/DATA/Notes/1/some-note-abcd1234.md")
+    assert ra.is_path_indexable(conn, root_id="r1", path="/DATA/Documents/Notes/keep.md")

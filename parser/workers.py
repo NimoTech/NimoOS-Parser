@@ -7,7 +7,7 @@ import time
 from typing import Optional
 
 from parser import pacing
-from parser.pathgate import has_container_ancestor
+from parser.pathgate import is_gated_path
 from parser.repo_jobs import dequeue_job, complete_job, fail_job, renew_lease
 from parser.repo_records import set_last_error
 from parser.service_retire import retire_root
@@ -293,8 +293,8 @@ class WorkerPool:
             # enqueue path that predates the gate. Never parse it; let the
             # job complete empty. (Extension / folder rules stay with the
             # enqueue side — they are configurable and tested there.)
-            if has_container_ancestor(job["path"]):
-                log.info("skip %s job under container dir: %s", op, job["path"])
+            if is_gated_path(job["path"]):
+                log.info("skip %s job under gated path: %s", op, job["path"])
                 return True
             self.text_pipeline.index_file(
                 root_id=job["root_id"], path=job["path"],

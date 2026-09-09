@@ -10,7 +10,7 @@ import sqlite3
 import time
 import uuid
 
-from parser.pathgate import has_container_ancestor
+from parser.pathgate import is_gated_path
 
 
 def list_extensions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -67,12 +67,12 @@ def is_path_indexable(conn: sqlite3.Connection, *, root_id: str,
                       path: str) -> bool:
     """Single source of truth for "should this (root_id, path) be indexed".
 
-    Priority: container-dir gate > explicit deny > explicit allow > extension
-    check. The container-dir gate (parser.pathgate) is not configurable and
-    beats an explicit allow rule. Folder rules only apply within their own
+    Priority: path gate > explicit deny > explicit allow > extension check.
+    The path gate (parser.pathgate: container dirs + GATED_PATH_PREFIXES) is
+    not configurable and beats an explicit allow rule. Folder rules only apply within their own
     root_id.
     """
-    if has_container_ancestor(path):
+    if is_gated_path(path):
         return False
     ext = posixpath.splitext(path)[1].lower()
 
